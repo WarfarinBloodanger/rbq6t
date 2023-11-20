@@ -60,10 +60,28 @@
 #include<map>
 #include<set>
 #include<fstream>
+
+#ifdef _WIN32
 #include<windows.h>
+#elif __linux__
+#include <dlfcn.h>
+#else
+#error rbqscript 6 turbo can only be used on Windows or Linux
+#endif
+
 using namespace std;
 
 char excpbuf[1024];
+
+#define DLL_ERROR "DLLError"
+#define IO_ERROR "IOError"
+#define ATTRIBUTE_ERROR "AttributeError"
+#define INDEX_ERROR "IndexError"
+#define SYSTEM_ERROR "SystemError"
+#define TYPE_ERROR "TypeError"
+#define ARGUMENT_ERROR "ArgumentError"
+#define FORMAT_ERROR "FormatError"
+
 #define SYNTAX_ERR(str,...) do{sprintf(excpbuf,str"\n",__VA_ARGS__);throw (string)excpbuf;}while(0)
 #define FORMAT(str,...) (sprintf(excpbuf,str,__VA_ARGS__),(string)excpbuf)
 void THROW(const string&type,const string&reason);
@@ -93,7 +111,7 @@ const double PI=acos(-1);
 bool DEBUG_MODE=false;
 bool cliMode=false;
 const uint MAGIC_NUMBER=0X01140514;
-const uint VERSION_CODE=0X60001020;
+const uint VERSION_CODE=0X60001040;
 uint runstackSize=1024*8;
 
 #define Add emplace_back
@@ -149,6 +167,37 @@ ostream& operator<<(ostream&out,const CodeSet&s){
 	return out;
 }
 namespace utils{
+string gbkToUtf8(const string &gbkStr) {
+#ifdef _WIN32
+    wstring unicodeStr;
+    int len = MultiByteToWideChar(CP_ACP, 0, gbkStr.c_str(), -1, NULL, 0);
+    unicodeStr.resize(len);
+    MultiByteToWideChar(CP_ACP, 0, gbkStr.c_str(), -1, &unicodeStr[0], len);
+    len = WideCharToMultiByte(CP_UTF8, 0, unicodeStr.c_str(), -1, NULL, 0, NULL, NULL);
+    string utf8Str;
+    utf8Str.resize(len);
+    WideCharToMultiByte(CP_UTF8, 0, unicodeStr.c_str(), -1, &utf8Str[0], len, NULL, NULL);
+    return utf8Str;
+#else
+    return gbkStr;
+#endif
+}
+
+string utf8ToGbk(const string &utf8Str) {
+#ifdef _WIN32
+    wstring unicodeStr;
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, NULL, 0);
+    unicodeStr.resize(len);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, &unicodeStr[0], len);
+    len = WideCharToMultiByte(CP_ACP, 0, unicodeStr.c_str(), -1, NULL, 0, NULL, NULL);
+    string gbkStr;
+    gbkStr.resize(len);
+    WideCharToMultiByte(CP_ACP, 0, unicodeStr.c_str(), -1, &gbkStr[0], len, NULL, NULL);
+    return gbkStr;
+#else
+    return utf8Str;
+#endif
+}
 long long hex2dec(const string&s){
 	long long x=0,v=0;
 	uint i=0;
@@ -343,12 +392,12 @@ namespace file_manager{
 		FILE *ptr=fopen(file.c_str(),mode.c_str());
 		if(ptr==NULL){
 			if(write){ofstream fcout(file.c_str());fcout.close();}
-			else THROW("IOError",FORMAT("%s",(("File doesn't exist: "+file).c_str())));
+			else THROW(IO_ERROR,FORMAT("%s",(("File doesn't exist: "+file).c_str())));
 		}
 		file_ptrs[size++]=ptr;
 		return size-1;
 	}
-	inline void check_handle(int handle){if(handle<0||handle>=size)THROW("IOError",FORMAT("%s",(("Invalid handle: "+num2str(handle)).c_str())));}
+	inline void check_handle(int handle){if(handle<0||handle>=size)THROW(IO_ERROR,FORMAT("%s",(("Invalid handle: "+num2str(handle)).c_str())));}
 	inline bool file_close(int handle){check_handle(handle);return fclose(file_ptrs[handle]);}
 	inline bool file_eof(int handle){check_handle(handle);return feof(file_ptrs[handle]);}
 	inline string fread_string(int handle){check_handle(handle);fscanf(file_ptrs[handle],"%s",fbuffer);return fbuffer;}
@@ -1602,6 +1651,12 @@ struct Value{
 	string ToStr()const{
 		return Val2Str((const ValueRef)this);
 	}
+	string ToUTF8Str()const{
+        return gbkToUtf8(ToStr());
+    }
+	string ToGBKStr()const{
+        return utf8ToGbk(ToStr());
+    }
 	string GetTypeName()const{
 		return ValType2Str((const ValueRef)this);
 	}
@@ -1625,14 +1680,14 @@ struct Value{
 	   const Value&func=GetAttribute((const ValueRef)this,(string)#attr);\
 	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(ValueRef)&v,(const ValueRef)this); \
 	}\
-	THROW("TypeError",FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
+	THROW(TYPE_ERROR,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
 	
 	#define CHECK_BOOL_OP(symbol,attr)\
 	if(HasAttribute((const ValueRef)this,(string)#attr)){\
 	   const Value&func=GetAttribute((const ValueRef)this,(string)#attr);\
 	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(ValueRef)&v,(const ValueRef)this).IsTrue(); \
 	}\
-	THROW("TypeError",FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
+	THROW(TYPE_ERROR,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
 	
 	Value operator+(const Value&v)const{
 		if(type==TYPE_NUM&&v.type==TYPE_NUM)return num+v.num;
@@ -1652,6 +1707,7 @@ struct Value{
 	}
 	Value operator/(const Value&v)const{
 		if(type==TYPE_NUM&&v.type==TYPE_NUM)return num/v.num;
+		if(!HasAttribute((const ValueRef)this,(string)"__div__"))if(type==TYPE_STR||v.type==TYPE_STR)return ToStr()+"/"+v.ToStr();
         CHECK_OP(/,__div__);
 		return (string)"[bad: /]";
 	}
@@ -1801,7 +1857,7 @@ struct Fn{
 				return prim(thisObject,args,argc);
 			}
 			case FN_SCRIPT:{
-				if(argc>info->argsCnt)THROW("ArgumentsError",FORMAT("more than %d argument(s) provided",info->argsCnt));
+				if(argc>info->argsCnt)THROW(ARGUMENT_ERROR,FORMAT("more than %d argument(s) provided",info->argsCnt));
 				
 				RunStack bottom=esp;
 				for(uint i=0;i<info->localCnt;i++){
@@ -1816,7 +1872,7 @@ struct Fn{
 				return RunCode(bottom,bottom+info->localCnt+1,this,thisObject);
 			}
 			default:{
-				THROW("SystemError",FORMAT("unknown function at %p is called",this));
+				THROW(SYSTEM_ERROR,FORMAT("unknown function at %p is called",this));
 				return Value();
 			}
 		}
@@ -1979,7 +2035,7 @@ Value* GLBV;
 Table<string> klass##_ATTR;\
 Value* klass##_ATTR_FN;\
 const uint klass##_ATTR_COUNT=count;
-BUILTIN_ATTRIBUTES(STRING,13)
+BUILTIN_ATTRIBUTES(STRING,15)
 BUILTIN_ATTRIBUTES(ARRAY,9)
 BUILTIN_ATTRIBUTES(MAP,4)
 
@@ -2029,7 +2085,7 @@ bool HasBuiltinAttribute(const Value&a,const string&attrName){
 
 Value GetAttribute(const ValueRef&a,const string&attr){
 	if(HasBuiltinAttribute(*a,attr))return GetBuiltinAttribute(*a,attr);
-	if(a->type!=TYPE_MAP)THROW("AttributeError",FORMAT("type '%s' does not own a '%s' attribute",a->GetTypeName().c_str(),attr.c_str()));
+	if(a->type!=TYPE_MAP)THROW(ATTRIBUTE_ERROR,FORMAT("type '%s' does not own a '%s' attribute",a->GetTypeName().c_str(),attr.c_str()));
 	return (*a->obj->dict)[attr];
 }
 bool HasAttribute(const ValueRef&a,const string&attr){
@@ -2041,12 +2097,12 @@ string GetStringIndex(const string&str,const Value&value){
 	switch(value.type){
 		case TYPE_NUM:{
 			int index=(int)value.num;
-			if(abs(index)>=str.size())THROW("IndexError",FORMAT("index %d out of string bounds",index));
+			if(abs(index)>=str.size())THROW(INDEX_ERROR,FORMAT("index %d out of string bounds",index));
 			if(index<0)index+=str.size();
 			return (string)""+str[index];
 		}
 		default:{
-			THROW("IndexError",FORMAT("type '%s' cannot be used as string indices",value.GetTypeName().c_str()));
+			THROW(INDEX_ERROR,FORMAT("type '%s' cannot be used as string indices",value.GetTypeName().c_str()));
 			return "";
 		}
 	}
@@ -2056,12 +2112,12 @@ Value GetArrayIndex(vector<Value>*arr,const Value&value){
 	switch(value.type){
 		case TYPE_NUM:{
 			int index=(int)value.num;
-			if(abs(index)>=arr->size())THROW("IndexError",FORMAT("index %d out of array bounds",index));
+			if(abs(index)>=arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",index));
 			if(index<0)index+=arr->size();
 			return (*arr)[index];
 		}
 		default:{
-			THROW("IndexError",FORMAT("type '%s' cannot be used as array indices",value.GetTypeName().c_str()));
+			THROW(INDEX_ERROR,FORMAT("type '%s' cannot be used as array indices",value.GetTypeName().c_str()));
 			return Value();
 		}
 	}
@@ -2086,7 +2142,7 @@ void SetupUpvalues(Fn* fn){
 				break;
 			}
 			default:{
-				THROW("SystemError",FORMAT("unknown upvalue type (id=%d)",upvs[i].type));
+				THROW(SYSTEM_ERROR,FORMAT("unknown upvalue type (id=%d)",upvs[i].type));
 				break;
 			}
 		}
@@ -2201,7 +2257,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 						TOP()=((*(TOP().obj->arr))[ins.x]);
 						BACK();
 					}
-					default:THROW("IndexError",FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
+					default:THROW(INDEX_ERROR,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
 				}
 			}
 			case GETADDR:{
@@ -2226,7 +2282,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 						POPSTACK();
 						BACK();
 					}
-					default:THROW("IndexError",FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
+					default:THROW(INDEX_ERROR,FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
 				}
 			}
 			case INVOKE:{
@@ -2251,11 +2307,11 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 						func=((*(owner->obj->dict))[index]);
 						break;
 					}
-					default:THROW("AttributeError",FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
+					default:THROW(ATTRIBUTE_ERROR,FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
 				}
 				
 				if(func.type!=TYPE_FUNC){
-					THROW("TypeError",FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
+					THROW(TYPE_ERROR,FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
 				}
 				
 				Value value=func.obj->fn->CallFunc(esp-argc,argc,esp,owner);
@@ -2275,7 +2331,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 						TOP_3()=TOP_1(); POP_SLOTS(2); 
 						BACK();
 					}
-					default:THROW("IndexError",FORMAT("type '%s' is not index-able or is not editable",TOP().GetTypeName().c_str()));
+					default:THROW(INDEX_ERROR,FORMAT("type '%s' is not index-able or is not editable",TOP().GetTypeName().c_str()));
 				}
 				BACK();
 			}
@@ -2526,7 +2582,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 			case CALL:{
 				uint argc=ins.x;
 				if(SEEK(argc+1).type!=TYPE_FUNC){
-					THROW("TypeError",FORMAT("type '%s' is not callable",SEEK(argc+1).GetTypeName().c_str()));
+					THROW(TYPE_ERROR,FORMAT("type '%s' is not callable",SEEK(argc+1).GetTypeName().c_str()));
 				}
 				Value value=SEEK(argc+1).obj->fn->CallFunc(esp-argc,argc,esp,&ENV);
 				POP_SLOTS(argc);
@@ -2547,7 +2603,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 				ip++;
 				uint typeId=ins.x;
 				if(STRING_CONSTANT_VALUE[typeId]!=LOCAL(argnum).GetTypeName()){
-					THROW("TypeError",FORMAT("expected type '%s' for argument %d, given: '%s'",STRING_CONSTANT_VALUE[typeId].c_str(),argnum+1,LOCAL(argnum).GetTypeName().c_str()));
+					THROW(TYPE_ERROR,FORMAT("expected type '%s' for argument %d, given: '%s'",STRING_CONSTANT_VALUE[typeId].c_str(),argnum+1,LOCAL(argnum).GetTypeName().c_str()));
 				}
 				BACK();
 			}
@@ -2580,7 +2636,7 @@ namespace JSONParser{
 	const Token&Read(uchar tokenType){
 		const Token&cur=Cur();
 		if(cur.type!=tokenType){
-			THROW("JSONError",FORMAT("unexpected '%s' in json at line %d, column %d, expected '%s'",cur.val.c_str(),cur.line,cur.column,tokenName[tokenType].c_str()));
+			THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d, expected '%s'",cur.val.c_str(),cur.line,cur.column,tokenName[tokenType].c_str()));
 		}
 		return tokens[curIndex++];
 	}
@@ -2643,7 +2699,7 @@ namespace JSONParser{
 				cur.type=TOK_STR,tokens.push_back(cur);
 			}
 			else if(isspace(src[loc]))nextchar();
-			else THROW("JSONError",FORMAT("unexpected character '%c'(ascii=%d) at line %d, column %d",src[loc],src[loc],line,column));
+			else THROW(FORMAT_ERROR,FORMAT("unexpected character '%c'(ascii=%d) at line %d, column %d",src[loc],src[loc],line,column));
 		}
 	}
 	
@@ -2657,7 +2713,7 @@ namespace JSONParser{
 				return Value(stringExpr(r.substr(1,r.size()-2)));
 			}
 			case TOK_LBR:{
-				if(isKey)THROW("JSONError",FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
+				if(isKey)THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
 				Read();
 				Value value;
 				value.type=TYPE_MAP;
@@ -2675,7 +2731,7 @@ namespace JSONParser{
 				return value; 
 			}
 			case TOK_LBK:{
-				if(isKey)THROW("JSONError",FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
+				if(isKey)THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
 				Read();
 				Value value;
 				value.type=TYPE_ARR;
@@ -2691,7 +2747,7 @@ namespace JSONParser{
 				return value; 
 			}
 			default:{
-				THROW("JSONError",FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
+				THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
 				return Value();
 			}
 		}
@@ -2713,11 +2769,11 @@ namespace JSONParser{
 namespace strutils{
 	inline string substring(const string&s,const Value&from,const Value&to){
 		if(from.type==TYPE_UNDEF&&to.type==TYPE_UNDEF)return s;
-		if(from.type!=TYPE_NUM)THROW("IndexError",FORMAT("should not use '%s' as substring indice",from.ToStr().c_str()));
+		if(from.type!=TYPE_NUM)THROW(INDEX_ERROR,FORMAT("should not use '%s' as substring indice",from.ToStr().c_str()));
 		int a=from.num,b=0;
 		if(to.type==TYPE_UNDEF)b=s.size()-1;
 		else if(to.type==TYPE_NUM)b=to.num;
-		else THROW("IndexError",FORMAT("should not use '%s' as substring indice",to.ToStr().c_str()));
+		else THROW(INDEX_ERROR,FORMAT("should not use '%s' as substring indice",to.ToStr().c_str()));
 		a=a<0?0:a,b=b<0?0:b,b=(unsigned int64_t)b>=s.size()?s.size()-1:b;
 		string r="";
 		for(int i=a;i<=b;i++)r+=s[i];
@@ -2754,15 +2810,15 @@ namespace strutils{
 			if(f[i]=='{'){
 				uint idx=0,ok=0;i++;
 				while(i<len&&f[i]!='}'){
-					if(!isdigit(f[i]))THROW("FormatError",FORMAT("invalid format string '%s': invalid index character '%c'",f.c_str(),f[i]));
+					if(!isdigit(f[i]))THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': invalid index character '%c'",f.c_str(),f[i]));
 					idx=(idx<<3)+(idx<<1)+(f[i]&15),i++,ok=1;
 				}
-				if(f[i]!='}')THROW("FormatError",FORMAT("invalid format string '%s': unterminated '{'",f.c_str()));
-				if(!ok)THROW("FormatError",FORMAT("invalid format string '%s': expected an index at position %d",f.c_str(),i));
-				if(idx>=v.size())THROW("FormatError",FORMAT("invalid format string '%s': unprovided value index %d",f.c_str(),idx));
+				if(f[i]!='}')THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': unterminated '{'",f.c_str()));
+				if(!ok)THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': expected an index at position %d",f.c_str(),i));
+				if(idx>=v.size())THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': unprovided value index %d",f.c_str(),idx));
 				r+=v[idx]->ToStr();
 			}
-			else if(f[i]=='}')THROW("FormatError",FORMAT("invalid format string '%s': unmatched '}'",f.c_str()));
+			else if(f[i]=='}')THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': unmatched '}'",f.c_str()));
 			else r+=f[i];
 		}
 		return r;
@@ -2800,7 +2856,7 @@ namespace strutils{
 		int start=0;
 		if(from.type==TYPE_UNDEF)start=0;
 		else if(from.type==TYPE_NUM)start=from.num;
-		else THROW("IndexError",FORMAT("should not use '%s' as indice",from.ToStr().c_str()));
+		else THROW(INDEX_ERROR,FORMAT("should not use '%s' as indice",from.ToStr().c_str()));
 		start=start<0?0:start,start=(unsigned int64_t)start>=_.size()?_.size()-1:start; 
 		uint x=_.find(rpl,start);
 		if(x==string::npos)return -1;
@@ -2814,12 +2870,12 @@ Value Builtin_##name(ValueRef thisObject,Value*args,uint argc)
 
 #define ARG(x) args[x]
 #define ARGC_ERR(a,name)\
-THROW("ArgumentError",FORMAT("expected %d argument(s) when calling %s, given: %d",a,#name,argc))
+THROW(ARGUMENT_ERROR,FORMAT("expected %d argument(s) when calling %s, given: %d",a,#name,argc))
 #define ARGC_ERR_2(a,name)\
-THROW("ArgumentError",FORMAT("expected %s argument(s) when calling %s, given: %d",a,#name,argc))
+THROW(ARGUMENT_ERROR,FORMAT("expected %s argument(s) when calling %s, given: %d",a,#name,argc))
 
 #define ARG_TYPE_ERR(num,type,name)\
-THROW("TypeError",FORMAT("expected type '%s' for argument %d when calling %s, given: %s",type,num+1,#name,ARG(num).GetTypeName().c_str()))
+THROW(TYPE_ERROR,FORMAT("expected type '%s' for argument %d when calling %s, given: %s",type,num+1,#name,ARG(num).GetTypeName().c_str()))
 
 BT_FUNC(print){
 	for(uint i=0;i<argc;i++){
@@ -2888,10 +2944,20 @@ BT_FUNC(loadDll){
 	if(argc!=2)ARGC_ERR(2,"loadNative");
 	if(ARG(0).type!=TYPE_STR)ARG_TYPE_ERR(0,"string","loadNative");
 	if(ARG(1).type!=TYPE_STR)ARG_TYPE_ERR(1,"string","loadNative");
+    NativeFunction func;
+    
+#ifdef _WIN32
 	HMODULE hMod=LoadLibrary(ARG(0).obj->str->c_str());
-	if(!hMod)THROW("IOError",FORMAT("cannot open dll '%s'",ARG(0).obj->str->c_str()));
-	NativeFunction func=(NativeFunction)GetProcAddress(hMod,ARG(1).obj->str->c_str());
-	if(!func)THROW("IOError",FORMAT("cannot load function '%s'",ARG(1).obj->str->c_str()));
+	if(!hMod)THROW(DLL_ERROR,FORMAT("cannot open dll '%s'",ARG(0).obj->str->c_str()));
+	func=(NativeFunction)GetProcAddress(hMod,ARG(1).obj->str->c_str());
+	if(!func)THROW(DLL_ERROR,FORMAT("cannot load function '%s'",ARG(1).obj->str->c_str()));
+#elif __linux__
+    void* handle=dlopen(ARG(0).obj->str->c_str(),RTLD_LAZY);
+    if(!handle)THROW(DLL_ERROR,FORMAT("cannot open dll '%s', error: %s",ARG(0).obj->str->c_str()),dlerror());
+    func=reinterpret_cast<NativeFunction>(dlsym(handle,ARG(1).obj->str->c_str()));
+    const char* dlsymError=dlerror();
+    if(dlsymError)THROW(DLL_ERROR,FORMAT("cannot load function '%s', error: %s",ARG(1).obj->str->c_str()),dlsymError);
+#endif
 	
 	Value value;
 	value.type=TYPE_FUNC;
@@ -3067,7 +3133,7 @@ BT_FUNC(ArrRemoveAt){
 	int index=ARG(0).num;
 	vector<Value>*arr=thisObject->obj->arr;
 	
-	if(abs(index)>=arr->size())THROW("IndexError",FORMAT("index %d out of array bounds",index));
+	if(abs(index)>=arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",index));
 	if(index<0)index+=arr->size();
 	
 	auto it=arr->begin();
@@ -3096,8 +3162,8 @@ BT_FUNC(ArrReverse){
 		
 		int leftBound=ARG(0).num;
 		int rightBound=ARG(1).num;
-		if(abs(leftBound)>arr->size())THROW("IndexError",FORMAT("index %d out of array bounds",leftBound));
-		if(abs(rightBound)>arr->size())THROW("IndexError",FORMAT("index %d out of array bounds",rightBound));
+		if(abs(leftBound)>arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",leftBound));
+		if(abs(rightBound)>arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",rightBound));
 		if(leftBound<0)leftBound+=arr->size();
 		if(rightBound<0)rightBound+=arr->size();
 		
@@ -3188,6 +3254,14 @@ BT_FUNC(StrIndexOf){
 BT_FUNC(StrLength){
 	if(argc!=0)ARGC_ERR(0,"string.Length");
 	return thisObject->obj->str->size();
+}
+BT_FUNC(StrGBK2UTF8){
+	if(argc!=0)ARGC_ERR(0,"string.GBKToUTF8");
+	return thisObject->ToUTF8Str();
+}
+BT_FUNC(StrUTF82GBK){
+	if(argc!=0)ARGC_ERR(0,"string.UTF8ToGBK");
+	return thisObject->ToGBKStr();
 }
 
 void SetupFuncs();
@@ -3328,6 +3402,8 @@ void SetupFuncs(){
 	STR_FUNC("Split",Split);
 	STR_FUNC("IndexOf",IndexOf);
 	STR_FUNC("Length",Length);
+	STR_FUNC("GBKToUTF8",GBK2UTF8);
+	STR_FUNC("UTF8ToGBK",UTF82GBK);
 }
 
 }
@@ -3453,6 +3529,7 @@ void GC(){
 struct rbq_env{
 	Value (*NewNumber)(double x);
 	Value (*NewString)(const char* buf);
+	Value (*NewStringWithGBK)(const char* buf);
 	Value (*NewPointer)(void* ptr);
 	
 	Value (*NewArray)();
@@ -3474,6 +3551,7 @@ struct rbq_env{
 	Value (*CallFunction)(Value value,Value thisObject,Value* args,int argc);
 	
 	const char* (*ToStr)(Value value);
+	const char* (*ToGBKStr)(Value value);
 	Value (*JSON)(const char*json);
 	
 	void (*Throw)(const char*type,const char*reason);
@@ -3485,7 +3563,10 @@ Value Native_NewNumber(double num){
 	return num;
 }
 Value Native_NewString(const char* buf){
-	return string(buf);
+	return utf8ToGbk(string(buf));
+}
+Value Native_NewStringWithGBK(const char* buf){
+	return gbkToUtf8(string(buf));
 }
 Value Native_NewPointer(void* ptr){
 	return Value(ptr);
@@ -3556,7 +3637,10 @@ Value Native_CallFunction(Value value,Value thisObject,Value* args,int argc){
 }
 
 const char* Native_ToStr(Value value){
-	return value.ToStr().c_str();
+	return value.ToUTF8Str().c_str();
+}
+const char* Native_ToGBKStr(Value value){
+	return value.ToGBKStr().c_str();
 }
 Value Native_JSON(const char* json){
 	return JSONParser::Loads(json);
@@ -3572,6 +3656,7 @@ void InitNative(){
 	
 	BIND_ENV(NewNumber);
 	BIND_ENV(NewString);
+	BIND_ENV(NewStringWithGBK);
 	BIND_ENV(NewPointer);
 	
 	BIND_ENV(NewArray);
@@ -3593,6 +3678,7 @@ void InitNative(){
 	BIND_ENV(CallFunction);
 	
 	BIND_ENV(ToStr);
+	BIND_ENV(ToGBKStr);
 	BIND_ENV(JSON);
 	
 	BIND_ENV(Throw);
@@ -3699,12 +3785,12 @@ void ReadByteCode(const string&file,CodeSet&mainBlock){
 	
 	uint magicNumber=ReadUint();
 	if(magicNumber!=MAGIC_NUMBER){
-		THROW("SystemError",FORMAT("malformed or broken bytefile (magic number: %0X8)",magicNumber));
+		THROW(SYSTEM_ERROR,FORMAT("malformed or broken bytefile (magic number: %0X8)",magicNumber));
 	} 
 	
 	uint versionCode=ReadUint();
 	if(versionCode>VERSION_CODE){
-		THROW("SystemError",FORMAT("not compatible version (bytecode: %0X8, vm: %0X8)",versionCode,VERSION_CODE));
+		THROW(SYSTEM_ERROR,FORMAT("not compatible version (bytecode: %0X8, vm: %0X8)",versionCode,VERSION_CODE));
 	}
 	
 	uint glbvCount,builtinCount;
