@@ -1,5 +1,16 @@
+#define __AVX__ 1
+#define __AVX2__ 1
+#define __SSE__ 1
+#define __SSE2__ 1
+#define __SSE2_MATH__ 1
+#define __SSE3__ 1
+#define __SSE4_1__ 1
+#define __SSE4_2__ 1
+#define __SSE_MATH__ 1
+#define __SSSE3__ 1
+
 #pragma GCC optimize(3)
-#pragma GCC target("avx")
+#pragma GCC target("sse,sse2,sse3,ssse3,sse4.1,sse4.2,avx,avx2,popcnt,bmi,bmi2,lzcnt,tune=native")
 #pragma GCC optimize("Ofast")
 #pragma GCC optimize("inline")
 #pragma GCC optimize("-fgcse")
@@ -8,6 +19,7 @@
 #pragma GCC optimize("-ftree-pre")
 #pragma GCC optimize("-ftree-vrp")
 #pragma GCC optimize("-fpeephole2")
+#pragma GCC optimize("fast-math")
 #pragma GCC optimize("-ffast-math")
 #pragma GCC optimize("-fsched-spec")
 #pragma GCC optimize("unroll-loops")
@@ -46,6 +58,8 @@
 #pragma GCC optimize("inline-functions-called-once")
 #pragma GCC optimize("-fdelete-null-pointer-checks")
 #pragma GCC optimize(2)
+
+#include <immintrin.h>
 #include<iostream>
 
 #include<cstring>
@@ -73,14 +87,14 @@ using namespace std;
 
 char excpbuf[1024];
 
-#define DLL_ERROR "DLLError"
-#define IO_ERROR "IOError"
-#define ATTRIBUTE_ERROR "AttributeError"
-#define INDEX_ERROR "IndexError"
-#define SYSTEM_ERROR "SystemError"
-#define TYPE_ERROR "TypeError"
-#define ARGUMENT_ERROR "ArgumentError"
-#define FORMAT_ERROR "FormatError"
+#define DLL_EXCEPTION "DLLException"
+#define IO_EXCEPTION "IOException"
+#define ATTRIBUTE_EXCEPTION "AttributeException"
+#define INDEX_EXCEPTION "IndexException"
+#define SYSTEM_EXCEPTION "SystemException"
+#define TYPE_EXCEPTION "TypeException"
+#define ARGUMENT_EXCEPTION "ArgumentException"
+#define FORMAT_EXCEPTION "FormatException"
 
 #define SYNTAX_ERR(str,...) do{sprintf(excpbuf,str"\n",__VA_ARGS__);throw (string)excpbuf;}while(0)
 #define FORMAT(str,...) (sprintf(excpbuf,str,__VA_ARGS__),(string)excpbuf)
@@ -111,8 +125,8 @@ const double PI=acos(-1);
 bool DEBUG_MODE=false;
 bool cliMode=false;
 const uint MAGIC_NUMBER=0X01140514;
-const uint VERSION_CODE=0X60001040;
-uint runstackSize=1024*8;
+const uint VERSION_CODE=0X60001080;
+uint runstackSize=1024*4;
 
 #define Add emplace_back
 #include "bytecode.cpp" 
@@ -177,6 +191,7 @@ string gbkToUtf8(const string &gbkStr) {
     string utf8Str;
     utf8Str.resize(len);
     WideCharToMultiByte(CP_UTF8, 0, unicodeStr.c_str(), -1, &utf8Str[0], len, NULL, NULL);
+    while(utf8Str.size()&&utf8Str.back()==0)utf8Str.pop_back();
     return utf8Str;
 #else
     return gbkStr;
@@ -193,6 +208,7 @@ string utf8ToGbk(const string &utf8Str) {
     string gbkStr;
     gbkStr.resize(len);
     WideCharToMultiByte(CP_ACP, 0, unicodeStr.c_str(), -1, &gbkStr[0], len, NULL, NULL);
+    while(gbkStr.size()&&gbkStr.back()==0)gbkStr.pop_back();
     return gbkStr;
 #else
     return utf8Str;
@@ -342,8 +358,16 @@ Bytes operator+(const Bytes&a,const Bytes&b){
 	for(auto x:b)c.Add(x);
 	return c;
 }
-Num str2num(const string&s){
-	Num v;stringstream ss("");ss<<s;ss>>v;return v;
+Num str2num(string s){
+    int k=1;
+    if(s.size()&&s[0]=='-'){
+        s=s.substr(1);
+        k=-1;
+    }
+    if(s.size()>=2&&(s[0]=='0'&&tolower(s[1])=='x')){
+        return k*hex2dec(s);
+    }
+	Num v=0;stringstream ss("");ss<<s;ss>>v;return v*k;
 }
 char buf[48];
 string num2str(const Num&d){
@@ -378,6 +402,9 @@ string ReplaceExt(const string&fileName){
 	if(x.size())return x+"rbq6";
 	return fileName+".rbq6";
 }
+inline bool isheader(char c){
+    return isalpha(c)||c=='_';
+}
 }
 using namespace utils;
 
@@ -392,12 +419,12 @@ namespace file_manager{
 		FILE *ptr=fopen(file.c_str(),mode.c_str());
 		if(ptr==NULL){
 			if(write){ofstream fcout(file.c_str());fcout.close();}
-			else THROW(IO_ERROR,FORMAT("%s",(("File doesn't exist: "+file).c_str())));
+			else THROW(IO_EXCEPTION,FORMAT("%s",(("File doesn't exist: "+file).c_str())));
 		}
 		file_ptrs[size++]=ptr;
 		return size-1;
 	}
-	inline void check_handle(int handle){if(handle<0||handle>=size)THROW(IO_ERROR,FORMAT("%s",(("Invalid handle: "+num2str(handle)).c_str())));}
+	inline void check_handle(int handle){if(handle<0||handle>=size)THROW(IO_EXCEPTION,FORMAT("%s",(("Invalid handle: "+num2str(handle)).c_str())));}
 	inline bool file_close(int handle){check_handle(handle);return fclose(file_ptrs[handle]);}
 	inline bool file_eof(int handle){check_handle(handle);return feof(file_ptrs[handle]);}
 	inline string fread_string(int handle){check_handle(handle);fscanf(file_ptrs[handle],"%s",fbuffer);return fbuffer;}
@@ -436,23 +463,25 @@ enum {
 	TOK_FUNC,TOK_IF,TOK_ELSE,TOK_WHILE,TOK_RET,TOK_FOR,TOK_VAR,TOK_BREAK,TOK_CTN,TOK_ALL,
 	TOK_TRUE,TOK_FALSE,TOK_NULL,TOK_UNDEFINED,TOK_INCLUDE,TOK_THIS,TOK_CLASS,TOK_NEW,TOK_HAS,TOK_TYPEOF,TOK_CHOOSE,TOK_IS,
 	TOK_OP,TOK_CONSTRUCTOR,TOK_PUB,TOK_PROT,TOK_PRIV,TOK_SUPER,TOK_STATIC,TOK_ARR,
-	TOK_TRY,TOK_CATCH,TOK_FINALLY,
+	TOK_TRY,TOK_CATCH,TOK_THROW,
 	TOK_ADDE,TOK_SUBE,
 	TOK_MULE,TOK_DIVE,TOK_MODE,
 	TOK_BITANDE,TOK_BITORE,TOK_XORE,TOK_LSHFE,TOK_RSHFE,TOK_REF,
+	TOK_FN,
 };
 const string tokenName[]={
 	"number","string","identifier","hexnumber",
 	"'+'","'-'","'*'","'/'","'%'","'=='","'!='","'>'","'<'","'>='","'<='",
 	"'&&'","'||'","'!'","'&'","'|'","'~'","'^'","'<<'","'>>'",
 	"','","'='","'.'","'?'","':'","'('","')'","'['","']'","'{'","'}'","';'",
-	"'fn'/'function'","'if'","'else'","'while'","'return'","'for'","'var'","'break'","'continue'","'all'",
+	"'function'","'if'","'else'","'while'","'return'","'for'","'var'","'break'","'continue'","'all'",
 	"'true'","'false'","'null'","'undef'","'include'","'this'","'class'","'new'","'has'","'typeof'","'or'","'is'",
 	"'operator'","'constructor'","'public'","'protected'","'private'","'super'","'static'","'arr'",
-	"try","catch","finally",
+	"try","catch","throw",
 	"+=","-=",
 	"*=","/=","%=",
-	"&=","|=","^=","<<=",">>=","ref"
+	"&=","|=","^=","<<=",">>=","ref",
+	"fn"
 };
 inline uint priority(char tok){
 	switch(tok){
@@ -490,7 +519,7 @@ ostream& operator<<(ostream&out,const Token&t){
 const Token END_TOKEN=Token();
 vector<Token> tokens;
 char getIdType(const string&s){
-	if(s=="fn")return TOK_FUNC;
+	if(s=="fn")return TOK_FN;
 	if(s=="function")return TOK_FUNC;
 	if(s=="if")return TOK_IF;
 	if(s=="else")return TOK_ELSE;
@@ -521,7 +550,7 @@ char getIdType(const string&s){
 	if(s=="arr")return TOK_ARR;
 	if(s=="try")return TOK_TRY;
 	if(s=="catch")return TOK_CATCH;
-	if(s=="finally")return TOK_FINALLY;
+	if(s=="throw")return TOK_THROW;
 	return TOK_ID; 
 }
 void tokenize(const string&file,const string&src,vector<Token>&tokens=tokens,int strict=1){
@@ -549,12 +578,13 @@ void tokenize(const string&file,const string&src,vector<Token>&tokens=tokens,int
 				cur.type=TOK_HEX,tokens.push_back(cur);
 			}
 			else{
-				while((loc<len&&isdigit(src[loc]))||src[loc]=='.'||src[loc]=='E'||src[loc]=='e'||src[loc]=='-'){
+				while((loc<len&&isdigit(src[loc]))||src[loc]=='.'||src[loc]=='E'||src[loc]=='e'||src[loc]=='-'||src[loc]=='_'){
 					if(src[loc]=='.'){if(!d)d=1;else break;}
 					if(src[loc]=='e'||src[loc]=='E'){if(n&&!e)e=1;else break;}
 					if(src[loc]=='-'){if(loc-1>=0&&(src[loc-1]=='e'||src[loc-1]=='E'));else break;}
 					if(isdigit(src[loc]))n=1;
-					cur.val.push_back(src[loc]),nextchar();
+					if(src[loc]!='_')cur.val.push_back(src[loc]);
+                    nextchar();
 				}
 				if(cur.val.size()==1&&cur.val[0]=='.')cur.type=TOK_DOT;
 				else cur.type=TOK_NUM;
@@ -865,6 +895,14 @@ struct FnInfo{
 	}
 	bool operator<(const FnInfo&fnInfo)const{return uniqueId<fnInfo.uniqueId;}
 };
+vector<string> fnDeclStack;
+vector<uint> usedFnCount;
+inline string GenerateFnName(const string&_name){
+    string name="";
+    for(auto a:fnDeclStack)name+=a,name+="@";
+    name+=_name;
+    return name;
+}
 
 Table<string> STRING_CONSTANT;
 Table<double> NUMBER_CONSTANT;
@@ -1013,6 +1051,7 @@ void Opt_JIF(CodeSet&context,uint offset){
 		CP(GE,JSML)
 		CP(EQL,JNEQ)
 		CP(NEQ,JEQ)
+		case NOP:context.pop_back();break;
 	}
 	context.emplace_back(Instr(byte,offset)); 
 }
@@ -1025,6 +1064,7 @@ void Opt_LJIF(CodeSet&context,uint offset){
 		CP(GE,LJSML)
 		CP(EQL,LJNEQ)
 		CP(NEQ,LJEQ)
+		case NOP:context.pop_back();break;
 	}
 	context.emplace_back(Instr(byte,offset)); 
 }
@@ -1038,7 +1078,8 @@ void Opt_Expr(CodeSet&context){
 		}
 	}
 }
-CodeSet FnBody(const string&name="<anonymous>");
+CodeSet FnBody(const string&name,bool ignoreParam=false,bool isCatch=false);
+CodeSet LambdaFnBody(const string&name);
 CodeSet Expr(uint precd){
 //	cout<<"Expression("<<precd<<")"<<endl;
 	CodeSet c;
@@ -1131,27 +1172,22 @@ CodeSet Expr(uint precd){
 			c.Add(TYPEOF);
 			break;
 		}
-		case TOK_MUL:{
-			nextToken();
-			concat(c,Expr(140));
-			c.Add(DEREF);
-			break;
-		}
-		case TOK_BITAND:{
-			nextToken();
-			concat(c,Expr(140));
-			c.Add(GETREF);
-			break;
-		}
 		case TOK_LPR:{
 			nextToken();
 			concat(c,Expr(0));
 			readToken(TOK_RPR);
 			break;
 		}
+		case TOK_FN:{
+		    nextToken();
+			usedFnCount.back()+=1;
+		    concat(c,LambdaFnBody(GenerateFnName(num2str(usedFnCount.back()))));
+            break;
+        }
 		case TOK_FUNC:{
 			nextToken();
-			concat(c,FnBody());
+			usedFnCount.back()+=1;
+			concat(c,FnBody(GenerateFnName(num2str(usedFnCount.back()))));
 			break;
 		}
 		default:{
@@ -1168,7 +1204,7 @@ CodeSet Expr(uint precd){
 				nextToken();\
 				CodeSet rExpr=Expr(priority(TOK_##op));\
 				concat(c,rExpr);\
-				c.Add(code);\
+				c.Add(Instr(code));\
 				break;\
 			}
 			
@@ -1182,7 +1218,10 @@ CodeSet Expr(uint precd){
 					c.pop_back();\
 					c.Add(Instr(code##E,x));\
 				}\
-				else c.Add(code);\
+				else{\
+				    if(rExpr.back().type==NOP)c.pop_back();\
+				    c.Add(Instr(code));\
+                }\
 				break;\
 			}
 			
@@ -1220,6 +1259,7 @@ CodeSet Expr(uint precd){
 				CodeSet branch=Expr(priority(TOK_AND));
 				c.Add(Instr(AND,(uint)branch.size()));
 				concat(c,branch);
+				c.Add(Instr(NOP)); 
 				break;
 			}
 			// logic or
@@ -1228,8 +1268,22 @@ CodeSet Expr(uint precd){
 				CodeSet branch=Expr(priority(TOK_OR));
 				c.Add(Instr(OR,(uint)branch.size()));
 				concat(c,branch);
+				c.Add(Instr(NOP));
 				break;
 			}
+			// ?
+			case TOK_QUEZ:{
+				nextToken();
+				CodeSet trueBranch=Expr(priority(TOK_QUEZ));
+				readToken(TOK_COL);
+				CodeSet falseBranch=Expr(priority(TOK_QUEZ));
+				trueBranch.Add(Instr(JUMP,(uint)falseBranch.size()));
+				Opt_JIF(c,trueBranch.size());
+				concat(c,trueBranch);
+				concat(c,falseBranch);
+				c.Add(Instr(NOP));
+                break;
+            }
 			case TOK_ASS:{
 				nextToken();
 				CodeSet v=Expr(priority(TOK_ASS));
@@ -1421,13 +1475,18 @@ CodeSet Break(){
 	return c;
 }
 
-CodeSet FnBody(const string&name){
+CodeSet FnBody(const string&name,bool ignoreParam,bool isCatch){
 	NewScope();
+	uint argsCnt=0;
+	CodeSet body;
+	
+	if(ignoreParam)goto AFTER_PARAM;
 	
 	readToken(TOK_LPR);
 	
-	uint argsCnt=0;
-	CodeSet body;
+	usedFnCount.Add(0);
+	fnDeclStack.Add(name);
+	
 	while(tok.type!=TOK_RPR){
 		string varName=readToken(TOK_ID).val;
 		
@@ -1435,9 +1494,12 @@ CodeSet FnBody(const string&name){
 		
 		// type definition
 		if(tok.type==TOK_COL){
+		    if(isCatch){
+		        SYNTAX_ERR("type definition should not appear in the parameter-list of 'catch'%cblock",' ');
+            }
 			nextToken();
 			string typeName=nextToken().val;
-			if(!isalpha(typeName[0])){
+			if(!isheader(typeName[0])){
 				SYNTAX_ERR("'%s' is not a valid type name",typeName.c_str());
 			}
 			body.Add(Instr(CHECKTYPE,argsCnt));
@@ -1450,7 +1512,9 @@ CodeSet FnBody(const string&name){
 	}
 	
 	readToken(TOK_RPR);
+	if(argsCnt!=1&&isCatch)SYNTAX_ERR("parameter-list of 'catch'%cblock should take exactly 1 argument",' ');
 	
+	AFTER_PARAM:
 	readToken(TOK_LBR);
 	concat(body,Block(false));
 	readToken(TOK_RBR);
@@ -1461,6 +1525,56 @@ CodeSet FnBody(const string&name){
 	
 	CodeSet s;
 	s.Add(Instr(FUNCSLOT,id));
+	
+	usedFnCount.pop_back();
+	fnDeclStack.pop_back();
+	
+	return s;
+}
+
+CodeSet LambdaFnBody(const string&name){
+	NewScope();
+	uint argsCnt=0;
+	CodeSet body;
+	
+	usedFnCount.Add(0);
+	fnDeclStack.Add(name);
+	
+	while(tok.type==TOK_ID){
+		string varName=readToken(TOK_ID).val;
+		
+		DeclareLocalVar(varName);
+		
+		// type definition
+		if(tok.type==TOK_COL){
+			nextToken();
+			string typeName=nextToken().val;
+			if(!isheader(typeName[0])){
+				SYNTAX_ERR("'%s' is not a valid type name",typeName.c_str());
+			}
+			body.Add(Instr(CHECKTYPE,argsCnt));
+			body.Add(Instr(CHECKTYPE,STRING_CONSTANT.Ensure(typeName)));
+		}
+		argsCnt++;
+		
+		if(tok.type==TOK_COM)nextToken();
+		else break;
+	}
+	
+	readToken(TOK_ASS);
+	concat(body,Expr(priority(TOK_ASS)));
+	body.Add(Instr(RETURN));
+	
+	SingleScope scope=CurScope();
+	PopScope();
+	uint id=FUNC_CONSTANT.Ensure(FnInfo(name,scope.upvalueInfo,scope.usedLocal,argsCnt,body));
+	
+	CodeSet s;
+	s.Add(Instr(FUNCSLOT,id));
+	
+	usedFnCount.pop_back();
+	fnDeclStack.pop_back();
+	
 	return s;
 }
 
@@ -1471,6 +1585,73 @@ CodeSet ClassDeclaration(){
 	return s;
 }
 
+CodeSet Try(){
+	nextToken();
+	CodeSet tryBlock,catchBlock;
+	
+	tryBlock=Stmt(false);
+	readToken(TOK_CATCH);
+	readToken(TOK_LPR);
+	
+	string exceptionVar=readToken(TOK_ID).val;
+	CurScope()._New();
+	DeclareLocalVar(exceptionVar);
+	readToken(TOK_RPR);
+	readToken(TOK_LBR);
+	
+	CodeSet c=LoadVar(exceptionVar);
+	switch(c.back().type){
+		#define REP(code1,code2)\
+		case code1:{\
+			uint x=c.back().x;\
+			c.pop_back();\
+			c.Add(Instr(code2,x));\
+			break;\
+		}
+		REP(LOADGLOBAL,STOREGLOBAL)
+		REP(LOADVAR,STORELOCAL)
+		REP(GETADDR,STOREADDR)
+		REP(GETATTR,STOREATTR)
+		default:{
+			SYNTAX_ERR("invalid left%cvalue in assignment",' ');
+			break;
+		}
+		#undef REP
+	}
+	
+	catchBlock.Add(GETEXCEPT);
+	concat(catchBlock,c);
+    while(!EOT()&&tok.type!=TOK_RBR){
+		concat(catchBlock,Stmt(false));
+	}
+	CurScope()._Pop();
+	readToken(TOK_RBR);
+	
+	tryBlock.Add(Instr(JUMP,(uint)catchBlock.size()));
+	
+	uint catchJump=tryBlock.size();
+	
+	CodeSet s;
+	s.Add(Instr(TRY,catchJump));
+	concat(s,tryBlock);
+	concat(s,catchBlock);
+	s.Add(Instr(ENDTRY)); 
+	
+	return s;
+}
+
+CodeSet MkThrow(){
+    nextToken();
+    CodeSet c;
+    readToken(TOK_LPR);
+    concat(c,Expr(0));
+    readToken(TOK_COM);
+    concat(c,Expr(0));
+    readToken(TOK_RPR);
+    c.Add(THROWEXCEPT);
+    return c;
+}
+
 CodeSet Stmt(bool top){
 	CodeSet c;
 	switch(tok.type){
@@ -1478,7 +1659,8 @@ CodeSet Stmt(bool top){
 			nextToken();
 			string fnName=readToken(TOK_ID).val;
 			concat(c,LoadVar(fnName));
-			CodeSet v=FnBody(fnName);
+			if(usedFnCount.size()>1)usedFnCount.back()+=1;
+			CodeSet v=FnBody(GenerateFnName(usedFnCount.size()>1?num2str(usedFnCount.back()):fnName));
 			switch(c.back().type){
 				#define REP(code1,code2)\
 				case code1:{\
@@ -1508,6 +1690,25 @@ CodeSet Stmt(bool top){
 		case TOK_CTN:concat(c,Continue());break;
 		case TOK_LBR:nextToken();concat(c,Block());readToken(TOK_RBR);break;
 		case TOK_FEN:nextToken();break;
+		case TOK_VAR:{
+		    nextToken();
+            while(1){
+                string localVar=readToken(TOK_ID).val;
+                DeclareLocalVar(localVar);
+                if(tok.type==TOK_ASS){
+                    nextToken();
+                    Instr instr=LoadVar(localVar).back();
+                    uchar type=instr.type;
+                    uint localId=instr.x;
+                    concat(c,Expr(0));
+                    c.Add(Instr(type==LOADGLOBAL?STOREGLOBAL:STORELOCAL,localId));
+                    c.Add(Instr(POP));
+                }
+                if(tok.type==TOK_COM)nextToken();
+                else break;
+            }
+            break;
+        }
 		case TOK_RET:{
 			nextToken();
 			if(tok.type==TOK_FEN)c.emplace_back(Instr(LOADNULL));
@@ -1519,6 +1720,8 @@ CodeSet Stmt(bool top){
 			concat(c,ClassDeclaration());
 			break;
 		}
+		case TOK_TRY:concat(c,Try());break;
+		case TOK_THROW:concat(c,MkThrow());break;
 		default:concat(c,Expr(0));c.emplace_back((top&&cliMode)?PRINT:POP);Opt_Expr(c);break;
 	}
 	return c;
@@ -1584,6 +1787,7 @@ void InitCompiler(){
 	builtinScope._Add("ascii");
 	builtinScope._Add("char");
 	builtinScope._Add("toNumber");
+	usedFnCount.Add(0);
 }
 
 }
@@ -1615,7 +1819,9 @@ Object* NewString(const string&str);
 Object* NewArray(uint size);
 Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject);
 Value GetAttribute(const ValueRef&val,const string&key);
+Value InnerCall(ValueRef fn,ValueRef thisObject);
 Value InnerCall(ValueRef fn,ValueRef arg,ValueRef thisObject);
+Value AddList(ObjectRef A,ObjectRef B);
 bool HasAttribute(const ValueRef&val,const string&key);
 typedef Value (*NativeFunction)(rbq_env* env,ValueRef thisObject,Value* argv,int argc);
 
@@ -1680,17 +1886,27 @@ struct Value{
 	   const Value&func=GetAttribute((const ValueRef)this,(string)#attr);\
 	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(ValueRef)&v,(const ValueRef)this); \
 	}\
-	THROW(TYPE_ERROR,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
+	THROW(TYPE_EXCEPTION,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
+	
+	#define CHECK_1_OP(symbol,attr)\
+	if(HasAttribute((const ValueRef)this,(string)#attr)){\
+	   const Value&func=GetAttribute((const ValueRef)this,(string)#attr);\
+	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(const ValueRef)this); \
+	}\
+	THROW(TYPE_EXCEPTION,FORMAT("cannot apply operation '%s'(unary) to type '%s'",#symbol,GetTypeName().c_str()))
 	
 	#define CHECK_BOOL_OP(symbol,attr)\
 	if(HasAttribute((const ValueRef)this,(string)#attr)){\
 	   const Value&func=GetAttribute((const ValueRef)this,(string)#attr);\
 	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(ValueRef)&v,(const ValueRef)this).IsTrue(); \
 	}\
-	THROW(TYPE_ERROR,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
+	THROW(TYPE_EXCEPTION,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
 	
 	Value operator+(const Value&v)const{
 		if(type==TYPE_NUM&&v.type==TYPE_NUM)return num+v.num;
+		if(type==TYPE_ARR&&v.type==TYPE_ARR){
+		    return AddList(this->obj,v.obj);
+        }
 		if(!HasAttribute((const ValueRef)this,(string)"__add__"))if(type==TYPE_STR||v.type==TYPE_STR)return ToStr()+v.ToStr();
         CHECK_OP(+,__add__);
 		return ToStr()+v.ToStr();
@@ -1733,16 +1949,27 @@ struct Value{
 	}
 	Value operator~()const{
 		if(type==TYPE_NUM)return ~int64_t(num);
+		CHECK_1_OP(~,__bitnot__);
+		return (string)"[bad: ~]";
+	}
+	Value operator+()const{
+		if(type==TYPE_NUM)return +(num);
+		CHECK_1_OP(+,__pst__);
+		return (string)"[bad: ~]";
+	}
+	Value operator-()const{
+		if(type==TYPE_NUM)return -(num);
+		CHECK_1_OP(-,__ngt__);
 		return (string)"[bad: ~]";
 	}
 	Value operator<<(const Value&v)const{
 		if(type==TYPE_NUM&&v.type==TYPE_NUM)return int64_t(num)<<int64_t(v.num);
-        CHECK_OP(<<,__lsht__);
+        CHECK_OP(<<,__lshf__);
 		return (string)"[bad: <<]";
 	}
 	Value operator>>(const Value&v)const{
 		if(type==TYPE_NUM&&v.type==TYPE_NUM)return int64_t(num)>>int64_t(v.num);
-        CHECK_OP(>>,__rsht__);
+        CHECK_OP(>>,__rshf__);
 		return (string)"[bad: >>]";
 	}
 	bool operator>(const Value&v)const{
@@ -1819,6 +2046,13 @@ typedef enum{
 	FN_NATIVE,
 } FnType;
 
+const string FN_TYPE_STR[]={
+    "unknown",
+    "function",
+    "primitive-function",
+    "native-function"
+};
+
 struct Upv{
 	Value _value;
 	ValueRef value;
@@ -1827,64 +2061,81 @@ struct Upv{
 struct Fn{
 	FnType type;
 	Upv* upvalues;
+	string name;
 	union{
 		NativeFunction func;
 		Primitive prim;
 		FnInfo* info;
 	};
 	Fn(){}
-	Fn(Primitive _prim){
+	Fn(Primitive _prim,const string&_name){
 		prim=_prim;
+		name=_name;
 		upvalues=NULL;
 		type=FN_PRIM;
 	}
-	Fn(NativeFunction _func){
+	Fn(NativeFunction _func,const string&_name){
 		func=_func;
+		name=_name;
 		upvalues=NULL;
 		type=FN_NATIVE;
 	}
 	Fn(FnInfo* _info){
 		info=_info;
+		name=_info->fnName;
 		upvalues=NULL;
 		type=FN_SCRIPT;
 	}
 	Value CallFunc(RunStack args,uint argc,RunStack esp,ValueRef thisObject){
 		switch(type){
 			case FN_NATIVE:{
-				return func(env,thisObject,args,argc);
+				Value v=func(env,thisObject,args,argc);
+				return v;
 			}
 			case FN_PRIM:{
 				return prim(thisObject,args,argc);
 			}
 			case FN_SCRIPT:{
-				if(argc>info->argsCnt)THROW(ARGUMENT_ERROR,FORMAT("more than %d argument(s) provided",info->argsCnt));
+				if(argc>info->argsCnt)THROW(ARGUMENT_EXCEPTION,FORMAT("more than %d argument(s) provided, given count: %d",info->argsCnt,argc));
 				
 				RunStack bottom=esp;
 				for(uint i=0;i<info->localCnt;i++){
 					if(i<argc){
+//					    printf("Set local %p(%d) to %s\n",esp+1,i,args[i].ToStr().c_str());
 						*(esp+i)=args[i];
 					}
 					else{
-						*(esp+1)=Value();
+//					    printf("Set local %p(%d) to undefined(no init)\n",esp+i,i);
+						*(esp+i)=Value();
 					}
 				}
 				
 				return RunCode(bottom,bottom+info->localCnt+1,this,thisObject);
 			}
 			default:{
-				THROW(SYSTEM_ERROR,FORMAT("unknown function at %p is called",this));
+				THROW(SYSTEM_EXCEPTION,FORMAT("unknown function at %p is called",this));
 				return Value();
 			}
 		}
 	}
+	string ToStr(){
+	    if(name==""){
+	        switch(type){
+	            case FN_NATIVE:name=ptr2str((void*)func);break;
+	            case FN_PRIM:name=ptr2str((void*)prim);break;
+	            default:break;
+            }
+        }
+	    return "<"+FN_TYPE_STR[type]+" "+name+">";
+    }
 };
 
 Value JSON(const string&str);
 
 vector<ObjectRef> OBJ_POOL,OBJ_POOL_2;
 
-uint GC_TRIGGER=1024*64;
-double GROW_FACTOR=1;
+uint GC_TRIGGER=1024*128;
+double GROW_FACTOR=1.25;
 uint ALLOCATED;
 
 #define ADD_MEM(type)\
@@ -1913,22 +2164,22 @@ ObjectRef NewFunc(FnInfo* info){
 	return obj;
 }
 
-ObjectRef NewBuiltinFunc(Primitive prim){
+ObjectRef NewBuiltinFunc(Primitive prim,const string&name){
 	if(ALLOCATED>=GC_TRIGGER)GC();
 	ObjectRef obj=new Object(TYPE_FUNC);
 	OBJ_POOL.Add(obj);
-	obj->fn=new Fn(prim);
+	obj->fn=new Fn(prim,name);
 	
 	ADD_MEM(Fn);
 	
 	return obj;
 }
 
-ObjectRef NewNativeFunc(NativeFunction native){
+ObjectRef NewNativeFunc(NativeFunction native,const string&name){
 	if(ALLOCATED>=GC_TRIGGER)GC();
 	ObjectRef obj=new Object(TYPE_FUNC);
 	OBJ_POOL.Add(obj);
-	obj->fn=new Fn(native);
+	obj->fn=new Fn(native,name);
 	
 	ADD_MEM(Fn);
 	
@@ -2000,8 +2251,15 @@ string Val2Str(const ValueRef&val){
 		case TYPE_NUM:return num2str(val->num);
 		case TYPE_STR:return *(val->obj->str);
 		case TYPE_ARR:return array2str(val->obj->arr); 
-		case TYPE_MAP:return map2str(val->obj->dict); 
+		case TYPE_MAP:{
+        	if(HasAttribute((const ValueRef)val,(string)"ToString")){
+        	   const Value&func=GetAttribute((const ValueRef)val,(string)"ToString");
+        	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(const ValueRef)val).ToStr();
+        	}
+		    return map2str(val->obj->dict);
+        }
 		case TYPE_PTR:return "(ptr @ "+ptr2str(val->ptr)+")";
+		case TYPE_FUNC:return val->obj->fn->ToStr();
 		default:return TYPE_NAME[val->type];
 	}
 }	
@@ -2013,6 +2271,7 @@ string StrictVal2Str(const ValueRef&val){
 		case TYPE_ARR:return array2str(val->obj->arr); 
 		case TYPE_MAP:return map2str(val->obj->dict); 
 		case TYPE_PTR:return "(ptr @ "+ptr2str(val->ptr)+")";
+		case TYPE_FUNC:return val->obj->fn->ToStr();
 		default:return TYPE_NAME[val->type];
 	}
 }
@@ -2022,9 +2281,19 @@ string ValType2Str(const ValueRef&val){
 	return TYPE_NAME[val->type]; 
 }
 
+Value AddList(ObjectRef A,ObjectRef B){
+    Value ret;
+    ret.type=TYPE_ARR;
+    ret.obj=NewArray(0);
+    *ret.obj->arr=*A->arr;
+    for(const auto&a:*(B->arr))ret.obj->arr->Add(a);
+    return ret;
+}
+
 struct Frame{
 	Fn* fn;
-	RunStack bottom; 
+	RunStack bottom;
+	vector<ObjectRef>*subfn;
 };
 
 uint GLB_CNT;
@@ -2035,8 +2304,8 @@ Value* GLBV;
 Table<string> klass##_ATTR;\
 Value* klass##_ATTR_FN;\
 const uint klass##_ATTR_COUNT=count;
-BUILTIN_ATTRIBUTES(STRING,15)
-BUILTIN_ATTRIBUTES(ARRAY,9)
+BUILTIN_ATTRIBUTES(STRING,16)
+BUILTIN_ATTRIBUTES(ARRAY,16)
 BUILTIN_ATTRIBUTES(MAP,4)
 
 Value* BUILTIN_VAR;
@@ -2085,7 +2354,7 @@ bool HasBuiltinAttribute(const Value&a,const string&attrName){
 
 Value GetAttribute(const ValueRef&a,const string&attr){
 	if(HasBuiltinAttribute(*a,attr))return GetBuiltinAttribute(*a,attr);
-	if(a->type!=TYPE_MAP)THROW(ATTRIBUTE_ERROR,FORMAT("type '%s' does not own a '%s' attribute",a->GetTypeName().c_str(),attr.c_str()));
+	if(a->type!=TYPE_MAP)THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' does not own a '%s' attribute",a->GetTypeName().c_str(),attr.c_str()));
 	return (*a->obj->dict)[attr];
 }
 bool HasAttribute(const ValueRef&a,const string&attr){
@@ -2093,16 +2362,20 @@ bool HasAttribute(const ValueRef&a,const string&attr){
 	return a->type==TYPE_MAP&&(a->obj->dict->find(attr)!=a->obj->dict->end());
 }
 
+bool CheckIndex(int index,uint limit){
+    return index<0?(abs(index)<=limit):uint(index)<limit;
+}
+
 string GetStringIndex(const string&str,const Value&value){
 	switch(value.type){
 		case TYPE_NUM:{
 			int index=(int)value.num;
-			if(abs(index)>=str.size())THROW(INDEX_ERROR,FORMAT("index %d out of string bounds",index));
+			if(!CheckIndex(index,str.size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of string bounds",index));
 			if(index<0)index+=str.size();
 			return (string)""+str[index];
 		}
 		default:{
-			THROW(INDEX_ERROR,FORMAT("type '%s' cannot be used as string indices",value.GetTypeName().c_str()));
+			THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as string indices",value.GetTypeName().c_str()));
 			return "";
 		}
 	}
@@ -2112,12 +2385,12 @@ Value GetArrayIndex(vector<Value>*arr,const Value&value){
 	switch(value.type){
 		case TYPE_NUM:{
 			int index=(int)value.num;
-			if(abs(index)>=arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",index));
+			if(!CheckIndex(index,arr->size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",index));
 			if(index<0)index+=arr->size();
 			return (*arr)[index];
 		}
 		default:{
-			THROW(INDEX_ERROR,FORMAT("type '%s' cannot be used as array indices",value.GetTypeName().c_str()));
+			THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",value.GetTypeName().c_str()));
 			return Value();
 		}
 	}
@@ -2142,7 +2415,7 @@ void SetupUpvalues(Fn* fn){
 				break;
 			}
 			default:{
-				THROW(SYSTEM_ERROR,FORMAT("unknown upvalue type (id=%d)",upvs[i].type));
+				THROW(SYSTEM_EXCEPTION,FORMAT("unknown upvalue type (id=%d)",upvs[i].type));
 				break;
 			}
 		}
@@ -2166,6 +2439,12 @@ Value InnerCall(ValueRef fn,ValueRef arg,ValueRef thisObject){
 	
 	Value ret=fn->obj->fn->CallFunc(globalEsp-1,1,globalEsp,thisObject);
 	
+	globalEsp=old;
+	return ret;
+}
+Value InnerCall(ValueRef fn,ValueRef thisObject){
+	RunStack old=globalEsp;
+	Value ret=fn->obj->fn->CallFunc(globalEsp,0,globalEsp,thisObject);
 	globalEsp=old;
 	return ret;
 }
@@ -2197,23 +2476,36 @@ Value InnerCall(Fn* fn,Value*args,uint argc,ValueRef thisObject){
 	return ret;
 }
 
+struct ExceptionInfo{
+    uint position;
+    uint offset;
+    RunStack esp;
+};
+
 Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 	Value retVal;
 	
 	const CodeSet&instr=fn->info->instr;
 	Upv* realUpv=fn->upvalues;
-	CALL_STACK.Add((Frame){fn,bottom});
-	vector<Fn*> CreatedFunctions; 
+	vector<ObjectRef>*CreatedFunctions=new vector<ObjectRef>(); 
+	CALL_STACK.Add((Frame){fn,bottom,CreatedFunctions});
 	
+	Value exception;
+	vector<ExceptionInfo> trials;
 	
 	uint size=instr.size();
 	uint ip=0;
 	RunStack _bottom=esp;
 	
+//	for(auto a=bottom;a!=esp;a++){
+//	    cout<<"["<<a<<"] local #"<<(a-bottom)<<": "<<a->ToStr()<<endl;
+//    }
+	
 	#define BACK()\
 	{\
 		ip++;\
 		globalEsp=esp;\
+		if(0)DebugOutput(_bottom,esp,ins);\
 		goto LOOP_START;\
 	}
 	
@@ -2229,396 +2521,458 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
 	#define LOCAL(x)	(bottom[x])
 	
 	#define SEEK_EXTENDED_ARGS(argc)	(instr[++ip].x)
-	while(1){
-		LOOP_START:
-		if(ip>=size)break;
-		const Instr&ins=instr[ip];
-		switch(ins.type){
-			default:{
-				cout<<"unknown instr at "<<ip<<endl;
-				cout<<ins<<endl;
-				break;
-			}
-			case STRSLOT:{
-				PUSH(Value(STRING_CONSTANT_VALUE[ins.x]));
-				BACK();
-			}
-			case NUMSLOT:{
-				PUSH(Value(NUMBER_CONSTANT_VALUE[ins.x]));
-				BACK();
-			}
-			case GETADDRSMI:{
-				switch(TOP().type){
-					case TYPE_STR:{
-						TOP()=string("")+(*(TOP().obj->str))[ins.x];
-						BACK();
-					}
-					case TYPE_ARR:{
-						TOP()=((*(TOP().obj->arr))[ins.x]);
-						BACK();
-					}
-					default:THROW(INDEX_ERROR,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
-				}
-			}
-			case GETADDR:{
-				if(TOP().type==TYPE_STR&&HasBuiltinAttribute(TOP_2(),*TOP().obj->str)){
-					TOP_2()=GetBuiltinAttribute(TOP_2(),*TOP().obj->str); 
-					POPSTACK();
-					BACK();
-				}
-				else switch(TOP_2().type){
-					case TYPE_STR:{
-						TOP_2()=GetStringIndex((*(TOP_2().obj->str)),TOP());
-						POPSTACK();
-						BACK();
-					}
-					case TYPE_ARR:{
-						TOP_2()=GetArrayIndex((TOP_2().obj->arr),TOP());
-						POPSTACK();
-						BACK();
-					}
-					case TYPE_MAP:{
-						TOP_2()=((*(TOP_2().obj->dict))[TOP()]);
-						POPSTACK();
-						BACK();
-					}
-					default:THROW(INDEX_ERROR,FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
-				}
-			}
-			case INVOKE:{
-				uint argc=ins.x;
-				
-				ValueRef owner=&SEEK(argc+2);
-				Value index=SEEK(argc+1);
-				Value func;
-				if(index.type==TYPE_STR&&HasBuiltinAttribute(*owner,*index.obj->str)){
-					func=GetBuiltinAttribute(*owner,*index.obj->str); 
-				}
-				else switch(owner->type){
-					case TYPE_STR:{
-						func=GetStringIndex((*(owner->obj->str)),index);
-						break;
-					}
-					case TYPE_ARR:{
-						func=GetArrayIndex((owner->obj->arr),index);
-						break;
-					}
-					case TYPE_MAP:{
-						func=((*(owner->obj->dict))[index]);
-						break;
-					}
-					default:THROW(ATTRIBUTE_ERROR,FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
-				}
-				
-				if(func.type!=TYPE_FUNC){
-					THROW(TYPE_ERROR,FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
-				}
-				
-				Value value=func.obj->fn->CallFunc(esp-argc,argc,esp,owner);
-				POP_SLOTS(argc+1);
-				TOP()=value;
-				BACK();
-			}
-			case STOREADDR:{
-				switch(TOP_3().type){
-					case TYPE_ARR:{
-						((*(TOP_3().obj->arr))[TOP_2().num])=TOP_1();
-						TOP_3()=TOP_1(); POP_SLOTS(2); 
-						BACK();
-					}
-					case TYPE_MAP:{
-						((*(TOP_3().obj->dict))[TOP_2()])=TOP_1();
-						TOP_3()=TOP_1(); POP_SLOTS(2); 
-						BACK();
-					}
-					default:THROW(INDEX_ERROR,FORMAT("type '%s' is not index-able or is not editable",TOP().GetTypeName().c_str()));
-				}
-				BACK();
-			}
-			case LOADARR:{
-				Value newArr;
-				newArr.type=TYPE_ARR;
-				newArr.obj=NewArray(ins.x);
-				vector<Value>* arr=newArr.obj->arr;
-				uint i=0;
-				for(auto ptr=esp-ins.x;ptr!=esp;ptr++){
-					(*arr)[i]=*ptr;
-					i++;
-				}
-				esp-=ins.x;
-				PUSH(newArr);
-				BACK();
-			}
-			case MAKEMAP:{
-				Value newDict;
-				newDict.type=TYPE_MAP;
-				newDict.obj=NewMap();
-				map<Value,Value>* dict=newDict.obj->dict;
-				for(auto ptr=esp-ins.x*2;ptr!=esp;ptr+=2){
-					(*dict)[*(ptr)]=*(ptr+1);
-				}
-				esp-=ins.x*2;
-				PUSH(newDict);
-				BACK();
-			}
-			case SMI:{
-				PUSH(Value(ins.x));
-				BACK();
-			}
-			case LOADTHIS:{
-				PUSH(*thisObject);
-				BACK();
-			}
-			case LOADGLOBAL:{
-				PUSH(GLBV[ins.x]);
-				BACK();
-			}
-			case LOADVAR:{
-				PUSH(bottom[ins.x]);
-				BACK();
-			}
-			case LOADUPVALUE:{
-				PUSH(*(realUpv[ins.x].value));
-				BACK();
-			}
-			case LOADBUILTIN:{
-				PUSH(BUILTIN_VAR[ins.x]);
-				BACK();
-			}
-			case STOREGLOBALSMI:{
-				GLBV[ins._o[0]]=Value(ins._o[1]);
-				BACK();
-			}
-			case STOREGLOBAL:{
-				GLBV[ins.x]=TOP_1();
-				BACK();
-			}
-			case STORELOCAL:{
-				bottom[ins.x]=TOP_1();
-				BACK();
-			}
-			case STOREUPVALUE:{
-				*(realUpv[ins.x].value)=TOP_1();
-				BACK();
-			}
-			case ADD:{
-				TOP_2()=TOP_2()+TOP_1(); POPSTACK();
-				BACK();
-			}
-			case SUB:{
-				TOP_2()=TOP_2()-TOP_1(); POPSTACK();
-				BACK();
-			}
-			case MUL:{
-				TOP_2()=TOP_2()*TOP_1(); POPSTACK();
-				BACK();
-			}
-			case DIV:{
-				TOP_2()=TOP_2()/TOP_1(); POPSTACK();
-				BACK();
-			}
-			case MOD:{
-				TOP_2()=TOP_2()%TOP_1(); POPSTACK();
-				BACK();
-			}
-			case BITAND:{
-				TOP_2()=TOP_2()&TOP_1(); POPSTACK();
-				BACK();
-			}
-			case BITOR:{
-				TOP_2()=TOP_2()|TOP_1(); POPSTACK();
-				BACK();
-			}
-			case BITNOT:{
-				TOP()=~TOP();
-				BACK();
-			}
-			case LSHF:{
-				TOP_2()=TOP_2()<<TOP_1(); POPSTACK();
-				BACK();
-			}
-			case RSHF:{
-				TOP_2()=TOP_2()>>TOP_1(); POPSTACK();
-				BACK();
-			}
-			case XOR:{
-				TOP_2()=TOP_2()^TOP_1(); POPSTACK();
-				BACK();
-			}
-			case ADDE:{
-				TOP_1()=TOP_1()+Value(ins.x);
-				BACK();
-			}
-			case SUBE:{
-				TOP_1()=TOP_1()-Value(ins.x);
-				BACK();
-			}
-			case MULE:{
-				TOP_1()=TOP_1()*Value(ins.x);
-				BACK();
-			}
-			case DIVE:{
-				TOP_1()=TOP_1()/Value(ins.x);
-				BACK();
-			}
-			case MODE:{
-				TOP_1()=TOP_1()%Value(ins.x);
-				BACK();
-			}
-			case BITANDE:{
-				TOP_1()=TOP_1()&Value(ins.x);
-				BACK();
-			}
-			case BITORE:{
-				TOP_1()=TOP_1()|Value(ins.x);
-				BACK();
-			}
-			case LSHFE:{
-				TOP_1()=TOP_1()<<Value(ins.x);
-				BACK();
-			}
-			case RSHFE:{
-				TOP_1()=TOP_1()>>Value(ins.x);
-				BACK();
-			}
-			case XORE:{
-				TOP_1()=TOP_1()^Value(ins.x);
-				BACK();
-			}
-			case SML:{
-				TOP_2()=(TOP_2()<TOP_1()); POPSTACK();
-				BACK();
-			}
-			case BIG:{
-				TOP_2()=(TOP_2()>TOP_1()); POPSTACK();
-				BACK();
-			}
-			case LE:{
-				TOP_2()=(TOP_2()<=TOP_1()); POPSTACK();
-				BACK();
-			}
-			case GE:{
-				TOP_2()=(TOP_2()>=TOP_1()); POPSTACK();
-				BACK();
-			}
-			case EQL:{
-				TOP_2()=(TOP_2()==TOP_1()); POPSTACK();
-				BACK();
-			}
-			case NEQ:{
-				TOP_2()=(TOP_2()!=TOP_1()); POPSTACK();
-				BACK();
-			}
-			case POP:{
-				POPSTACK();
-				BACK();
-			}
-			case AND:{
-				if(!TOP().IsTrue())ip+=ins.x;
-				POPSTACK();
-				BACK();
-			}
-			case OR:{
-				if(TOP().IsTrue())ip+=ins.x;
-				POPSTACK();
-				BACK();
-			}
-			case NOT:{
-				TOP()=!(TOP().IsTrue());
-				BACK();
-			}
-			case JSML:{
-				if((TOP_2()<TOP_1()))ip+=ins.x;
-				POP_SLOTS(2);
-				BACK();
-			}
-			case JBIG:{
-				if((TOP_2()>TOP_1()))ip+=ins.x;
-				POP_SLOTS(2);
-				BACK();
-			}
-			case JLE:{
-				if((TOP_2()<=TOP_1()))ip+=ins.x;
-				POP_SLOTS(2);
-				BACK();
-			}
-			case JGE:{
-				if((TOP_2()>=TOP_1()))ip+=ins.x;
-				POP_SLOTS(2);
-				BACK();
-			}
-			case JEQ:{
-				if((TOP_2()==TOP_1()))ip+=ins.x;
-				POP_SLOTS(2);
-				BACK();
-			}
-			case JNEQ:{
-				if((TOP_2()!=TOP_1()))ip+=ins.x;
-				POP_SLOTS(2);
-				BACK();
-			}
-			case JUMP_IF_FALSE:{
-				if(!TOP().IsTrue())ip+=ins.x;
-				POPSTACK();
-				BACK();
-			}
-			case JUMP:{
-				ip+=ins.x;
-				BACK();
-			}
-			case LOOP:{
-				ip-=ins.x;
-				BACK();
-			}
-			case FUNCSLOT:{
-				Value value;
-				value.type=TYPE_FUNC;
-				value.obj=NewFunc(&FUNC_CONSTANT.Get(ins.x));
-				SetupUpvalues(value.obj->fn);
-				CreatedFunctions.Add(value.obj->fn);
-				PUSH(value);
-				BACK();
-			}
-			case CALL:{
-				uint argc=ins.x;
-				if(SEEK(argc+1).type!=TYPE_FUNC){
-					THROW(TYPE_ERROR,FORMAT("type '%s' is not callable",SEEK(argc+1).GetTypeName().c_str()));
-				}
-				Value value=SEEK(argc+1).obj->fn->CallFunc(esp-argc,argc,esp,&ENV);
-				POP_SLOTS(argc);
-				TOP()=value;
-				BACK();
-			}
-			case PRINT:{
-				cout<<TOP().ToStr()<<endl;
-				POPSTACK();
-				BACK();
-			}
-			case TYPEOF:{
-				TOP()=TOP().GetTypeName();
-				BACK();
-			}
-			case CHECKTYPE:{
-				uint argnum=ins.x;
-				ip++;
-				uint typeId=ins.x;
-				if(STRING_CONSTANT_VALUE[typeId]!=LOCAL(argnum).GetTypeName()){
-					THROW(TYPE_ERROR,FORMAT("expected type '%s' for argument %d, given: '%s'",STRING_CONSTANT_VALUE[typeId].c_str(),argnum+1,LOCAL(argnum).GetTypeName().c_str()));
-				}
-				BACK();
-			}
-			case RETURN:{
-				retVal=TOP();
-				goto RETURN_STAGE;
-				BACK();
-			}
-		}
-	}
+	
+    while(1){
+        try{
+    		LOOP_START:
+    		if(ip>=size)break;
+    		const Instr&ins=instr[ip];
+    		switch(ins.type){
+    			default:{
+    				cout<<"unknown instr at "<<ip<<endl;
+    				cout<<ins<<endl;
+    				break;
+    			}
+    			case STRSLOT:{
+    				PUSH(Value(STRING_CONSTANT_VALUE[ins.x]));
+    				BACK();
+    			}
+    			case NUMSLOT:{
+    				PUSH(Value(NUMBER_CONSTANT_VALUE[ins.x]));
+    				BACK();
+    			}
+    			case GETADDRSMI:{
+    				switch(TOP().type){
+    					case TYPE_STR:{
+    						TOP()=string("")+(*(TOP().obj->str))[ins.x];
+    						BACK();
+    					}
+    					case TYPE_ARR:{
+    						TOP()=((*(TOP().obj->arr))[ins.x]);
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
+    				}
+    			}
+    			case GETADDR:{
+    				if(TOP().type==TYPE_STR&&HasBuiltinAttribute(TOP_2(),*TOP().obj->str)){
+    					TOP_2()=GetBuiltinAttribute(TOP_2(),*TOP().obj->str); 
+    					POPSTACK();
+    					BACK();
+    				}
+    				else switch(TOP_2().type){
+    					case TYPE_STR:{
+    						TOP_2()=GetStringIndex((*(TOP_2().obj->str)),TOP());
+    						POPSTACK();
+    						BACK();
+    					}
+    					case TYPE_ARR:{
+    						TOP_2()=GetArrayIndex((TOP_2().obj->arr),TOP());
+    						POPSTACK();
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						TOP_2()=((*(TOP_2().obj->dict))[TOP()]);
+    						POPSTACK();
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
+    				}
+    			}
+    			case INVOKE:{
+    				uint argc=ins.x;
+    				
+    				ValueRef owner=&SEEK(argc+2);
+    				Value index=SEEK(argc+1);
+    				Value func;
+    				if(index.type==TYPE_STR&&HasBuiltinAttribute(*owner,*index.obj->str)){
+    					func=GetBuiltinAttribute(*owner,*index.obj->str); 
+    				}
+    				else switch(owner->type){
+    					case TYPE_STR:{
+    						func=GetStringIndex((*(owner->obj->str)),index);
+    						break;
+    					}
+    					case TYPE_ARR:{
+    						func=GetArrayIndex((owner->obj->arr),index);
+    						break;
+    					}
+    					case TYPE_MAP:{
+    						func=((*(owner->obj->dict))[index]);
+    						break;
+    					}
+    					default:THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
+    				}
+    				
+    				if(func.type!=TYPE_FUNC){
+    					THROW(TYPE_EXCEPTION,FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
+    				}
+    				
+    				Value value=func.obj->fn->CallFunc(esp-argc,argc,esp,owner);
+    				POP_SLOTS(argc+1);
+    				TOP()=value;
+    				BACK();
+    			}
+    			case STOREADDR:{
+    				switch(TOP_3().type){
+    					case TYPE_ARR:{
+    					    vector<Value>*arr=TOP_3().obj->arr;
+    					    if(TOP_2().type!=TYPE_NUM)THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",TOP_2().GetTypeName().c_str()));
+    					    
+    					    int idx=TOP_2().num;
+			                if(!CheckIndex(idx,arr->size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",idx));
+    					    if(idx<0)idx+=arr->size();
+    						((*arr)[idx])=TOP_1();
+    						TOP_3()=TOP_1(); POP_SLOTS(2); 
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						((*(TOP_3().obj->dict))[TOP_2()])=TOP_1();
+    						TOP_3()=TOP_1(); POP_SLOTS(2); 
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP().GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case LOADARR:{
+    				Value newArr;
+    				newArr.type=TYPE_ARR;
+    				newArr.obj=NewArray(ins.x);
+    				vector<Value>* arr=newArr.obj->arr;
+    				uint i=0;
+    				for(auto ptr=esp-ins.x;ptr!=esp;ptr++){
+    					(*arr)[i]=*ptr;
+    					i++;
+    				}
+    				esp-=ins.x;
+    				PUSH(newArr);
+    				BACK();
+    			}
+    			case MAKEMAP:{
+    				Value newDict;
+    				newDict.type=TYPE_MAP;
+    				newDict.obj=NewMap();
+    				map<Value,Value>* dict=newDict.obj->dict;
+    				for(auto ptr=esp-ins.x*2;ptr!=esp;ptr+=2){
+    					(*dict)[*(ptr)]=*(ptr+1);
+    				}
+    				esp-=ins.x*2;
+    				PUSH(newDict);
+    				BACK();
+    			}
+    			case SMI:{
+    				PUSH(Value(ins.x));
+    				BACK();
+    			}
+    			case LOADTHIS:{
+    				PUSH(*thisObject);
+    				BACK();
+    			}
+    			case LOADGLOBAL:{
+    				PUSH(GLBV[ins.x]);
+    				BACK();
+    			}
+    			case LOADVAR:{
+    				PUSH(bottom[ins.x]);
+    				BACK();
+    			}
+    			case LOADUPVALUE:{
+    				PUSH(*(realUpv[ins.x].value));
+    				BACK();
+    			}
+    			case LOADBUILTIN:{
+    				PUSH(BUILTIN_VAR[ins.x]);
+    				BACK();
+    			}
+    			case STOREGLOBALSMI:{
+    				GLBV[ins._o[0]]=Value(ins._o[1]);
+    				BACK();
+    			}
+    			case STOREGLOBAL:{
+    				GLBV[ins.x]=TOP_1();
+    				BACK();
+    			}
+    			case STORELOCAL:{
+    				bottom[ins.x]=TOP_1();
+    				BACK();
+    			}
+    			case STOREUPVALUE:{
+    				*(realUpv[ins.x].value)=TOP_1();
+    				BACK();
+    			}
+    			case ADD:{
+    				TOP_2()=TOP_2()+TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case SUB:{
+    				TOP_2()=TOP_2()-TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case MUL:{
+    				TOP_2()=TOP_2()*TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case DIV:{
+    				TOP_2()=TOP_2()/TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case MOD:{
+    				TOP_2()=TOP_2()%TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case BITAND:{
+    				TOP_2()=TOP_2()&TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case BITOR:{
+    				TOP_2()=TOP_2()|TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case BITNOT:{
+    				TOP()=~TOP();
+    				BACK();
+    			}
+    			case POSITIVE:{
+    				TOP()=+TOP();
+    				BACK();
+    			}
+    			case NEGATIVE:{
+    				TOP()=-TOP();
+    				BACK();
+    			}
+    			case LSHF:{
+    				TOP_2()=TOP_2()<<TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case RSHF:{
+    				TOP_2()=TOP_2()>>TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case XOR:{
+    				TOP_2()=TOP_2()^TOP_1(); POPSTACK();
+    				BACK();
+    			}
+    			case ADDE:{
+    				TOP_1()=TOP_1()+Value(ins.x);
+    				BACK();
+    			}
+    			case SUBE:{
+    				TOP_1()=TOP_1()-Value(ins.x);
+    				BACK();
+    			}
+    			case MULE:{
+    				TOP_1()=TOP_1()*Value(ins.x);
+    				BACK();
+    			}
+    			case DIVE:{
+    				TOP_1()=TOP_1()/Value(ins.x);
+    				BACK();
+    			}
+    			case MODE:{
+    				TOP_1()=TOP_1()%Value(ins.x);
+    				BACK();
+    			}
+    			case BITANDE:{
+    				TOP_1()=TOP_1()&Value(ins.x);
+    				BACK();
+    			}
+    			case BITORE:{
+    				TOP_1()=TOP_1()|Value(ins.x);
+    				BACK();
+    			}
+    			case LSHFE:{
+    				TOP_1()=TOP_1()<<Value(ins.x);
+    				BACK();
+    			}
+    			case RSHFE:{
+    				TOP_1()=TOP_1()>>Value(ins.x);
+    				BACK();
+    			}
+    			case XORE:{
+    				TOP_1()=TOP_1()^Value(ins.x);
+    				BACK();
+    			}
+    			case SML:{
+    				TOP_2()=(TOP_2()<TOP_1()); POPSTACK();
+    				BACK();
+    			}
+    			case BIG:{
+    				TOP_2()=(TOP_2()>TOP_1()); POPSTACK();
+    				BACK();
+    			}
+    			case LE:{
+    				TOP_2()=(TOP_2()<=TOP_1()); POPSTACK();
+    				BACK();
+    			}
+    			case GE:{
+    				TOP_2()=(TOP_2()>=TOP_1()); POPSTACK();
+    				BACK();
+    			}
+    			case EQL:{
+    				TOP_2()=(TOP_2()==TOP_1()); POPSTACK();
+    				BACK();
+    			}
+    			case NEQ:{
+    				TOP_2()=(TOP_2()!=TOP_1()); POPSTACK();
+    				BACK();
+    			}
+    			case POP:{
+    				POPSTACK();
+    				BACK();
+    			}
+    			case AND:{
+    				if(!TOP().IsTrue())ip+=ins.x;
+    				else POPSTACK();
+    				BACK();
+    			}
+    			case OR:{
+    				if(TOP().IsTrue())ip+=ins.x;
+    				else POPSTACK();
+    				BACK();
+    			}
+    			case NOT:{
+    				TOP()=!(TOP().IsTrue());
+    				BACK();
+    			}
+    			case JSML:{
+    				if((TOP_2()<TOP_1()))ip+=ins.x;
+    				POP_SLOTS(2);
+    				BACK();
+    			}
+    			case JBIG:{
+    				if((TOP_2()>TOP_1()))ip+=ins.x;
+    				POP_SLOTS(2);
+    				BACK();
+    			}
+    			case JLE:{
+    				if((TOP_2()<=TOP_1()))ip+=ins.x;
+    				POP_SLOTS(2);
+    				BACK();
+    			}
+    			case JGE:{
+    				if((TOP_2()>=TOP_1()))ip+=ins.x;
+    				POP_SLOTS(2);
+    				BACK();
+    			}
+    			case JEQ:{
+    				if((TOP_2()==TOP_1()))ip+=ins.x;
+    				POP_SLOTS(2);
+    				BACK();
+    			}
+    			case JNEQ:{
+    				if((TOP_2()!=TOP_1()))ip+=ins.x;
+    				POP_SLOTS(2);
+    				BACK();
+    			}
+    			case JUMP_IF_FALSE:{
+    				if(!TOP().IsTrue())ip+=ins.x;
+    				POPSTACK();
+    				BACK();
+    			}
+    			case JUMP:{
+    				ip+=ins.x;
+    				BACK();
+    			}
+    			case LOOP:{
+    				ip-=ins.x;
+    				BACK();
+    			}
+    			case FUNCSLOT:{
+    				Value value;
+    				value.type=TYPE_FUNC;
+    				value.obj=NewFunc(&FUNC_CONSTANT.Get(ins.x));
+    				SetupUpvalues(value.obj->fn);
+    				CreatedFunctions->Add(value.obj);
+    				PUSH(value);
+    				BACK();
+    			}
+    			case CALL:{
+    				uint argc=ins.x;
+    				if(SEEK(argc+1).type!=TYPE_FUNC){
+    					THROW(TYPE_EXCEPTION,FORMAT("type '%s' is not callable",SEEK(argc+1).GetTypeName().c_str()));
+    				}
+    				Value value=SEEK(argc+1).obj->fn->CallFunc(esp-argc,argc,esp,&ENV);
+    				POP_SLOTS(argc);
+    				TOP()=value;
+    				BACK();
+    			}
+    			case PRINT:{
+    				cout<<TOP().ToStr()<<endl;
+    				POPSTACK();
+    				BACK();
+    			}
+    			case TYPEOF:{
+    				TOP()=TOP().GetTypeName();
+    				BACK();
+    			}
+    			case CHECKTYPE:{
+    				uint argnum=ins.x;
+    				ip++;
+    				uint typeId=instr[ip].x;
+    				if(STRING_CONSTANT_VALUE[typeId]!=LOCAL(argnum).GetTypeName()){
+    					THROW(TYPE_EXCEPTION,FORMAT("expected type '%s' for argument %d, given: '%s'",STRING_CONSTANT_VALUE[typeId].c_str(),argnum+1,LOCAL(argnum).GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case TRY:{
+    			    trials.Add((ExceptionInfo){
+    			        ip,
+    			        ins.x,
+    			        esp
+                    });
+    				BACK();
+    			}
+    			case ENDTRY:{
+    		        trials.pop_back();
+    				BACK();
+    			}
+    			case GETEXCEPT:{
+    				PUSH(exception);
+    				BACK();
+    			}
+    			case THROWEXCEPT:{
+    			    Value reason=TOP(); POPSTACK();
+    			    Value except=TOP(); POPSTACK();
+    			    THROW(reason.ToStr(),except.ToStr());
+    				BACK();
+    			}
+    			case RETURN:{
+    				retVal=TOP();
+    				goto RETURN_STAGE;
+    				BACK();
+    			}
+    		}
+    	}
+    	catch(const Value&_exc){
+    	    globalEsp=esp;
+    	    if(trials.size()){
+    	       uint position=trials.back().position;
+    	       uint offset=trials.back().offset;
+    	       esp=trials.back().esp;
+    	       globalEsp=esp;
+    	       
+    	       ip=position+offset;
+    	       exception=_exc;
+    	       ip++;
+            }
+            else{
+                for(auto a:*CreatedFunctions){
+            		CloseUpvalues(a->fn);
+            	}
+            	delete CreatedFunctions;
+            	CALL_STACK.pop_back();
+                throw _exc;
+            }
+        }
+    }
 	RETURN_STAGE:
 	
-	for(auto a:CreatedFunctions){
-		CloseUpvalues(a);
+	for(auto a:*CreatedFunctions){
+		CloseUpvalues(a->fn);
 	}
+	delete CreatedFunctions;
+	CALL_STACK.pop_back();
 	
 	return retVal;
 }
@@ -2636,7 +2990,7 @@ namespace JSONParser{
 	const Token&Read(uchar tokenType){
 		const Token&cur=Cur();
 		if(cur.type!=tokenType){
-			THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d, expected '%s'",cur.val.c_str(),cur.line,cur.column,tokenName[tokenType].c_str()));
+			THROW(FORMAT_EXCEPTION,FORMAT("unexpected '%s' in json at line %d, column %d, expected '%s'",cur.val.c_str(),cur.line,cur.column,tokenName[tokenType].c_str()));
 		}
 		return tokens[curIndex++];
 	}
@@ -2699,7 +3053,7 @@ namespace JSONParser{
 				cur.type=TOK_STR,tokens.push_back(cur);
 			}
 			else if(isspace(src[loc]))nextchar();
-			else THROW(FORMAT_ERROR,FORMAT("unexpected character '%c'(ascii=%d) at line %d, column %d",src[loc],src[loc],line,column));
+			else THROW(FORMAT_EXCEPTION,FORMAT("unexpected character '%c'(ascii=%d) at line %d, column %d",src[loc],src[loc],line,column));
 		}
 	}
 	
@@ -2713,7 +3067,7 @@ namespace JSONParser{
 				return Value(stringExpr(r.substr(1,r.size()-2)));
 			}
 			case TOK_LBR:{
-				if(isKey)THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
+				if(isKey)THROW(FORMAT_EXCEPTION,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
 				Read();
 				Value value;
 				value.type=TYPE_MAP;
@@ -2731,7 +3085,7 @@ namespace JSONParser{
 				return value; 
 			}
 			case TOK_LBK:{
-				if(isKey)THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
+				if(isKey)THROW(FORMAT_EXCEPTION,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
 				Read();
 				Value value;
 				value.type=TYPE_ARR;
@@ -2747,7 +3101,7 @@ namespace JSONParser{
 				return value; 
 			}
 			default:{
-				THROW(FORMAT_ERROR,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
+				THROW(FORMAT_EXCEPTION,FORMAT("unexpected '%s' in json at line %d, column %d",Cur().val.c_str(),Cur().line,Cur().column));
 				return Value();
 			}
 		}
@@ -2769,11 +3123,11 @@ namespace JSONParser{
 namespace strutils{
 	inline string substring(const string&s,const Value&from,const Value&to){
 		if(from.type==TYPE_UNDEF&&to.type==TYPE_UNDEF)return s;
-		if(from.type!=TYPE_NUM)THROW(INDEX_ERROR,FORMAT("should not use '%s' as substring indice",from.ToStr().c_str()));
+		if(from.type!=TYPE_NUM)THROW(INDEX_EXCEPTION,FORMAT("should not use '%s' as substring indice",from.ToStr().c_str()));
 		int a=from.num,b=0;
 		if(to.type==TYPE_UNDEF)b=s.size()-1;
 		else if(to.type==TYPE_NUM)b=to.num;
-		else THROW(INDEX_ERROR,FORMAT("should not use '%s' as substring indice",to.ToStr().c_str()));
+		else THROW(INDEX_EXCEPTION,FORMAT("should not use '%s' as substring indice",to.ToStr().c_str()));
 		a=a<0?0:a,b=b<0?0:b,b=(unsigned int64_t)b>=s.size()?s.size()-1:b;
 		string r="";
 		for(int i=a;i<=b;i++)r+=s[i];
@@ -2810,15 +3164,15 @@ namespace strutils{
 			if(f[i]=='{'){
 				uint idx=0,ok=0;i++;
 				while(i<len&&f[i]!='}'){
-					if(!isdigit(f[i]))THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': invalid index character '%c'",f.c_str(),f[i]));
+					if(!isdigit(f[i]))THROW(FORMAT_EXCEPTION,FORMAT("invalid format string '%s': invalid index character '%c'",f.c_str(),f[i]));
 					idx=(idx<<3)+(idx<<1)+(f[i]&15),i++,ok=1;
 				}
-				if(f[i]!='}')THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': unterminated '{'",f.c_str()));
-				if(!ok)THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': expected an index at position %d",f.c_str(),i));
-				if(idx>=v.size())THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': unprovided value index %d",f.c_str(),idx));
+				if(f[i]!='}')THROW(FORMAT_EXCEPTION,FORMAT("invalid format string '%s': unterminated '{'",f.c_str()));
+				if(!ok)THROW(FORMAT_EXCEPTION,FORMAT("invalid format string '%s': expected an index at position %d",f.c_str(),i));
+				if(idx>=v.size())THROW(FORMAT_EXCEPTION,FORMAT("invalid format string '%s': unprovided value index %d",f.c_str(),idx));
 				r+=v[idx]->ToStr();
 			}
-			else if(f[i]=='}')THROW(FORMAT_ERROR,FORMAT("invalid format string '%s': unmatched '}'",f.c_str()));
+			else if(f[i]=='}')THROW(FORMAT_EXCEPTION,FORMAT("invalid format string '%s': unmatched '}'",f.c_str()));
 			else r+=f[i];
 		}
 		return r;
@@ -2856,7 +3210,7 @@ namespace strutils{
 		int start=0;
 		if(from.type==TYPE_UNDEF)start=0;
 		else if(from.type==TYPE_NUM)start=from.num;
-		else THROW(INDEX_ERROR,FORMAT("should not use '%s' as indice",from.ToStr().c_str()));
+		else THROW(INDEX_EXCEPTION,FORMAT("should not use '%s' as indice",from.ToStr().c_str()));
 		start=start<0?0:start,start=(unsigned int64_t)start>=_.size()?_.size()-1:start; 
 		uint x=_.find(rpl,start);
 		if(x==string::npos)return -1;
@@ -2870,16 +3224,17 @@ Value Builtin_##name(ValueRef thisObject,Value*args,uint argc)
 
 #define ARG(x) args[x]
 #define ARGC_ERR(a,name)\
-THROW(ARGUMENT_ERROR,FORMAT("expected %d argument(s) when calling %s, given: %d",a,#name,argc))
+THROW(ARGUMENT_EXCEPTION,FORMAT("expected %d argument(s) when calling %s, given: %d",a,#name,argc))
 #define ARGC_ERR_2(a,name)\
-THROW(ARGUMENT_ERROR,FORMAT("expected %s argument(s) when calling %s, given: %d",a,#name,argc))
+THROW(ARGUMENT_EXCEPTION,FORMAT("expected %s argument(s) when calling %s, given: %d",a,#name,argc))
 
 #define ARG_TYPE_ERR(num,type,name)\
-THROW(TYPE_ERROR,FORMAT("expected type '%s' for argument %d when calling %s, given: %s",type,num+1,#name,ARG(num).GetTypeName().c_str()))
+THROW(TYPE_EXCEPTION,FORMAT("expected type '%s' for argument %d when calling %s, given: %s",type,num+1,#name,ARG(num).GetTypeName().c_str()))
 
 BT_FUNC(print){
 	for(uint i=0;i<argc;i++){
-		cout<<ARG(i).ToStr()<<' ';
+		cout<<ARG(i).ToStr();
+		if(i)cout<<' '; 
 	}
 	cout<<endl;
 	return argc;
@@ -2948,20 +3303,20 @@ BT_FUNC(loadDll){
     
 #ifdef _WIN32
 	HMODULE hMod=LoadLibrary(ARG(0).obj->str->c_str());
-	if(!hMod)THROW(DLL_ERROR,FORMAT("cannot open dll '%s'",ARG(0).obj->str->c_str()));
+	if(!hMod)THROW(DLL_EXCEPTION,FORMAT("cannot open dll '%s'",ARG(0).obj->str->c_str()));
 	func=(NativeFunction)GetProcAddress(hMod,ARG(1).obj->str->c_str());
-	if(!func)THROW(DLL_ERROR,FORMAT("cannot load function '%s'",ARG(1).obj->str->c_str()));
+	if(!func)THROW(DLL_EXCEPTION,FORMAT("cannot load function '%s'",ARG(1).obj->str->c_str()));
 #elif __linux__
     void* handle=dlopen(ARG(0).obj->str->c_str(),RTLD_LAZY);
-    if(!handle)THROW(DLL_ERROR,FORMAT("cannot open dll '%s', error: %s",ARG(0).obj->str->c_str()),dlerror());
+    if(!handle)THROW(DLL_EXCEPTION,FORMAT("cannot open dll '%s', error: %s",ARG(0).obj->str->c_str()),dlerror());
     func=reinterpret_cast<NativeFunction>(dlsym(handle,ARG(1).obj->str->c_str()));
     const char* dlsymError=dlerror();
-    if(dlsymError)THROW(DLL_ERROR,FORMAT("cannot load function '%s', error: %s",ARG(1).obj->str->c_str()),dlsymError);
+    if(dlsymError)THROW(DLL_EXCEPTION,FORMAT("cannot load function '%s', error: %s",ARG(1).obj->str->c_str()),dlsymError);
 #endif
 	
 	Value value;
 	value.type=TYPE_FUNC;
-	value.obj=NewNativeFunc(func);
+	value.obj=NewNativeFunc(func,(*ARG(1).obj->str)+"@"+(*ARG(0).obj->str));
 	return value;
 }
 
@@ -3073,6 +3428,21 @@ BT_FUNC(toNumber){
 	return str2num(ARG(0).ToStr());
 }
 
+BT_FUNC(try){
+	if(argc!=2&&argc!=3)ARGC_ERR_2("2 or 3 arguments","try");
+	if(ARG(0).type!=TYPE_FUNC)ARG_TYPE_ERR(0,"function","try");
+	if(ARG(1).type!=TYPE_FUNC)ARG_TYPE_ERR(1,"function","try");
+	if(argc==3)if(ARG(2).type!=TYPE_FUNC)ARG_TYPE_ERR(2,"function","try");
+	Value ret;
+	try{
+        ret=InnerCall(ARG(0).obj->fn,NULL,0,NULL);
+    }
+    catch(const Value&v){
+        ret=InnerCall(ARG(1).obj->fn,v,NULL);
+    }
+    if(argc==3)ret=InnerCall(ARG(2).obj->fn,NULL,0,NULL);
+	return ret;
+}
 BT_FUNC(MapLength){
 	if(argc!=0)ARGC_ERR(0,"map.Length");
 	return thisObject->obj->dict->size();
@@ -3133,7 +3503,7 @@ BT_FUNC(ArrRemoveAt){
 	int index=ARG(0).num;
 	vector<Value>*arr=thisObject->obj->arr;
 	
-	if(abs(index)>=arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",index));
+	if(abs(index)>=arr->size())THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",index));
 	if(index<0)index+=arr->size();
 	
 	auto it=arr->begin();
@@ -3147,7 +3517,7 @@ BT_FUNC(ArrAdd){
 	return thisObject->obj->arr->size();
 }
 BT_FUNC(ArrPop){
-	if(argc!=1)ARGC_ERR(0,"array.Pop");
+	if(argc!=0)ARGC_ERR(0,"array.Pop");
 	thisObject->obj->arr->pop_back();
 	return thisObject->obj->arr->size();
 }
@@ -3162,8 +3532,8 @@ BT_FUNC(ArrReverse){
 		
 		int leftBound=ARG(0).num;
 		int rightBound=ARG(1).num;
-		if(abs(leftBound)>arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",leftBound));
-		if(abs(rightBound)>arr->size())THROW(INDEX_ERROR,FORMAT("index %d out of array bounds",rightBound));
+		if(abs(leftBound)>arr->size())THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",leftBound));
+		if(abs(rightBound)>arr->size())THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",rightBound));
 		if(leftBound<0)leftBound+=arr->size();
 		if(rightBound<0)rightBound+=arr->size();
 		
@@ -3193,6 +3563,65 @@ BT_FUNC(ArrResize){
 	thisObject->obj->arr->resize(ARG(0).num);
 	return Value();
 }
+BT_FUNC(ArrAny){
+	if(argc!=1)ARGC_ERR(1,"array.Any");
+	if(ARG(0).type!=TYPE_FUNC)ARG_TYPE_ERR(0,"function","array.Any");
+	Fn* fn=ARG(0).obj->fn;
+	for(const auto&a:*(thisObject->obj->arr))if(InnerCall(fn,a,&ENV).IsTrue())return Value(1.0f);
+	return Value(0.0f);
+}
+BT_FUNC(ArrAll){
+	if(argc!=1)ARGC_ERR(1,"array.All");
+	if(ARG(0).type!=TYPE_FUNC)ARG_TYPE_ERR(0,"function","array.All");
+	Fn* fn=ARG(0).obj->fn;
+	for(const auto&a:*(thisObject->obj->arr))if(!InnerCall(fn,a,&ENV).IsTrue())return Value(0.0f);
+	return Value(1.0f);
+}
+BT_FUNC(ArrZip){
+	if(argc!=2)ARGC_ERR(1,"array.Zip");
+	if(ARG(0).type!=TYPE_ARR)ARG_TYPE_ERR(0,"array","array.Zip");
+	if(ARG(1).type!=TYPE_FUNC)ARG_TYPE_ERR(1,"function","array.Zip");
+	
+	vector<Value> *A=thisObject->obj->arr;
+	vector<Value> *B=ARG(0).obj->arr;
+	Fn* zipper=ARG(1).obj->fn;
+	uint size=min(A->size(),B->size());
+	
+	Value value;
+	value.type=TYPE_ARR;
+	value.obj=NewArray(size);
+	
+	for(uint i=0;i<size;i++)(*value.obj->arr)[i]=InnerCall(zipper,(*A)[i],(*B)[i],&ENV);
+	
+	return value;
+}
+BT_FUNC(ArrEach){
+	if(argc!=1)ARGC_ERR(1,"array.Each");
+	if(ARG(0).type!=TYPE_FUNC)ARG_TYPE_ERR(0,"function","array.Each");
+	Fn* fn=ARG(0).obj->fn;
+	for(const auto&a:*(thisObject->obj->arr))InnerCall(fn,a,&ENV);
+	return Value(0.0f);
+}
+BT_FUNC(ArrTrim){
+	if(argc!=0)ARGC_ERR(0,"array.Trim");
+	vector<Value>*arr=(thisObject->obj->arr);
+	double cnt=0;
+	while(arr->size()&&arr->back().type==TYPE_UNDEF)arr->pop_back(),cnt++; 
+	return Value(cnt);
+}
+BT_FUNC(ArrMap){
+	if(argc!=1)ARGC_ERR(1,"array.Map");
+	if(ARG(0).type!=TYPE_FUNC)ARG_TYPE_ERR(0,"function","array.Map");
+	Fn* fn=ARG(0).obj->fn;
+	for(auto&a:*(thisObject->obj->arr))a=InnerCall(fn,a,&ENV);
+	return Value(0.0f);
+}
+BT_FUNC(ArrFill){
+	if(argc!=1)ARGC_ERR(1,"array.Fill");
+	for(auto&a:*(thisObject->obj->arr))a=ARG(0);
+	return Value(0.0f);
+}
+
 
 BT_FUNC(StrSubstring){
 	if(argc<0||argc>2)ARGC_ERR_2("1 or 2","string.Substring");
@@ -3248,7 +3677,10 @@ BT_FUNC(StrSplit){
 }
 BT_FUNC(StrIndexOf){
 	if(argc<0||argc>2)ARGC_ERR_2("1 or 2","string.IndexOf");
-	if(argc==1)return substring(*thisObject->obj->str,*ARG(0).obj->str,0.0f);
+	if(ARG(0).type!=TYPE_STR)ARG_TYPE_ERR(0,"string","string.IndexOf");
+	if(argc==1)return indexof(*thisObject->obj->str,*ARG(0).obj->str,0.0f);
+	
+	if(ARG(1).type!=TYPE_NUM)ARG_TYPE_ERR(1,"number","string.IndexOf");
 	return indexof(*thisObject->obj->str,*ARG(0).obj->str,ARG(1).num);
 }
 BT_FUNC(StrLength){
@@ -3262,6 +3694,19 @@ BT_FUNC(StrGBK2UTF8){
 BT_FUNC(StrUTF82GBK){
 	if(argc!=0)ARGC_ERR(0,"string.UTF8ToGBK");
 	return thisObject->ToGBKStr();
+}
+BT_FUNC(StrJoin){
+	if(argc!=1)ARGC_ERR(0,"string.Join");
+	if(ARG(0).type!=TYPE_ARR)ARG_TYPE_ERR(0,"array","string.Join");
+	string str="";
+	string *comma=thisObject->obj->str;
+	bool first=true;
+	for(const auto&a:*ARG(0).obj->arr){
+	    if(first)first=false;
+	    else str+=(*comma);
+	    str+=a.ToStr();
+    }
+    return str;
 }
 
 void SetupFuncs();
@@ -3294,7 +3739,7 @@ void SetupFuncs(){
 	uint bdidx=0;
 	#define BUILTIN(func)\
 	BUILTIN_VAR[bdidx].type=TYPE_FUNC;\
-	BUILTIN_VAR[bdidx].obj=NewBuiltinFunc(Builtin_##func);\
+	BUILTIN_VAR[bdidx].obj=NewBuiltinFunc(Builtin_##func,#func);\
 	bdidx++
 	
 	#define BUILTIN_VALUE(_value)\
@@ -3358,7 +3803,7 @@ void SetupFuncs(){
 	#define MAP_FUNC(name,func)\
 	bdidx=MAP_ATTR.Ensure(name);\
 	MAP_ATTR_FN[bdidx].type=TYPE_FUNC;\
-	MAP_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_Map##func)
+	MAP_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_Map##func,(string)"map."+name)
 	
 	MAP_FUNC("Length",Length);
 	MAP_FUNC("Has",Has);
@@ -3369,17 +3814,27 @@ void SetupFuncs(){
 	#define ARR_FUNC(name,func)\
 	bdidx=ARRAY_ATTR.Ensure(name);\
 	ARRAY_ATTR_FN[bdidx].type=TYPE_FUNC;\
-	ARRAY_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_Arr##func)
+	ARRAY_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_Arr##func,(string)"array."+name)
 	
 	ARR_FUNC("Length",Length);
 	ARR_FUNC("Has",Has);
 	ARR_FUNC("Remove",Remove);
 	ARR_FUNC("RemoveAt",RemoveAt);
 	ARR_FUNC("Add",Add);
+	
 	ARR_FUNC("Pop",Pop);
 	ARR_FUNC("Reverse",Reverse);
 	ARR_FUNC("Sort",Sort);
 	ARR_FUNC("Resize",Resize);
+	ARR_FUNC("Any",Any);
+	
+	ARR_FUNC("All",All);
+	ARR_FUNC("Zip",Zip);
+	ARR_FUNC("Each",Each);
+	ARR_FUNC("Trim",Trim);
+	ARR_FUNC("Map",Map);
+	
+	ARR_FUNC("Fill",Fill);
 	
 	
 	STRING_ATTR_FN=new Value[STRING_ATTR_COUNT];
@@ -3387,23 +3842,27 @@ void SetupFuncs(){
 	#define STR_FUNC(name,func)\
 	bdidx=STRING_ATTR.Ensure(name);\
 	STRING_ATTR_FN[bdidx].type=TYPE_FUNC;\
-	STRING_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_Str##func)
+	STRING_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_Str##func,(string)"string."+name)
 	
 	STR_FUNC("Substring",Substring);
 	STR_FUNC("Substr",Substr);
 	STR_FUNC("ToUpper",ToUpper);
 	STR_FUNC("ToSmall",ToSmall);
 	STR_FUNC("StartsWith",StartsWith);
+	
 	STR_FUNC("EndsWith",EndsWith);
 	STR_FUNC("Trim",Trim);
 	STR_FUNC("Format",Format);
 	STR_FUNC("Repeat",Repeat);
 	STR_FUNC("Replace",Replace);
+	
 	STR_FUNC("Split",Split);
 	STR_FUNC("IndexOf",IndexOf);
 	STR_FUNC("Length",Length);
 	STR_FUNC("GBKToUTF8",GBK2UTF8);
 	STR_FUNC("UTF8ToGBK",UTF82GBK);
+	
+	STR_FUNC("Join",Join);
 }
 
 }
@@ -3422,6 +3881,14 @@ void MarkValue(ValueRef ref){
 	}
 }
 uint tabs=0;
+void MarkFunc(Fn* fn){
+	if(fn->type==FN_SCRIPT){
+	   for(uint i=0;i<fn->info->upvalueInfo.size();i++){
+			MarkValue(fn->upvalues[i].value);
+			MarkValue(&fn->upvalues[i]._value);
+		}
+	}
+}
 void MarkObject(ObjectRef ref){
 	if(ref->isBlack)return;
 	ref->isBlack=true;
@@ -3456,12 +3923,7 @@ void MarkObject(ObjectRef ref){
 			break;
 		}
 		case TYPE_FUNC:{
-			if(ref->fn->type==FN_SCRIPT){
-				for(uint i=0;i<ref->fn->info->upvalueInfo.size();i++){
-					MarkValue(ref->fn->upvalues[i].value);
-					MarkValue(&ref->fn->upvalues[i]._value);
-				}
-			}
+		    MarkFunc(ref->fn);
 			break;
 		}
 	}
@@ -3473,6 +3935,7 @@ using namespace GarbageCollector;
 
 void GC(){
 	if(DEBUG_MODE)cout<<"GC Triggered"<<endl;
+	if(DEBUG_MODE)system("pause > nul");
 //	system("pause > nul");
 	uint start=clock();
 //	cout<<"STACK="<<STACK<<", ESP="<<globalEsp<<endl;
@@ -3492,6 +3955,13 @@ void GC(){
 	for(auto a=STACK;a<globalEsp;a++){
 		MarkValue(a);
 	}
+	for(const auto&frame:CALL_STACK){
+		MarkFunc(frame.fn);
+	    if(frame.subfn!=nullptr)
+		for(const auto&subfn:*frame.subfn){
+		    MarkObject(subfn);
+        }
+	}
 	uint before=ALLOCATED;
 	for(auto survived:OBJ_POOL){
 		if(survived->isBlack){
@@ -3499,7 +3969,7 @@ void GC(){
 		}
 	}
 	for(auto ref:OBJ_POOL)if(!ref->isBlack){
-		if(DEBUG_MODE){
+		if(0){
 			cout<<"FREE "<<TYPE_NAME[ref->type]<<" @ "<<ref;
 			if(ref->type==TYPE_FUNC){
 				if((ref->fn->type)==FN_SCRIPT)cout<<"("<<ref->fn->info->fnName<<")";
@@ -3508,13 +3978,13 @@ void GC(){
 			puts("");
 		}
 		switch(ref->type){
-			case TYPE_FUNC:ALLOCATED-=sizeof(Fn);break;
-			case TYPE_ARR:ALLOCATED-=sizeof(vector<Value>);break;
-			case TYPE_MAP:ALLOCATED-=sizeof(map<Value,Value>);break;
-			case TYPE_STR:ALLOCATED-=sizeof(string);break;
+			case TYPE_FUNC:delete[] ref->fn->upvalues;delete ref->fn;ALLOCATED-=sizeof(Fn);break;
+			case TYPE_ARR:ref->arr->clear();delete ref->arr;ALLOCATED-=sizeof(vector<Value>);break;
+			case TYPE_MAP:ref->dict->clear();delete ref->dict;ALLOCATED-=sizeof(map<Value,Value>);break;
+			case TYPE_STR:ref->str->clear();delete ref->str;ALLOCATED-=sizeof(string);break;
 			default:break;
 		}
-		free(ref);
+		delete ref;
 	}
 	for(auto survived:OBJ_POOL_2)survived->isBlack=false;
 	OBJ_POOL=OBJ_POOL_2;
@@ -3523,7 +3993,7 @@ void GC(){
 	uint after=ALLOCATED;
 	GC_TRIGGER*=GROW_FACTOR;
 	if(DEBUG_MODE)printf("Garbage Collection done. Before: %u, after: %u, collected: %u, cost %.3gs\n",before,after,before-after,(clock()-start)/1000.0);
-//	system("pause > nul");
+	if(DEBUG_MODE)system("pause > nul");
 }
 
 struct rbq_env{
@@ -3620,7 +4090,7 @@ int Native_GetMapLength(Value value){
 Value Native_NewFunction(NativeFunction func){
     Value value;
     value.type=TYPE_FUNC;
-    value.obj=NewNativeFunc(func);
+    value.obj=NewNativeFunc(func,"");
     return value;
 }
 Value Native_GetAttribute(Value value,const char* attribute){
@@ -3706,7 +4176,7 @@ void SaveByteCode(const string&file,uint glbvCount,uint builtinCount,CodeSet&mai
 	};
 	auto WriteNumber=[&](double x){
 		parser.x=x;
-		for(uint i=0;i<8;i++)WriteByte(parser.bits[i]);
+		for(uint i=0;i<sizeof(double)/sizeof(uchar);i++)WriteByte(parser.bits[i]);
 	};
 	auto WriteString=[&](const string&x){
 		WriteUint(x.size());
@@ -3773,7 +4243,7 @@ void ReadByteCode(const string&file,CodeSet&mainBlock){
 		return x;
 	};
 	auto ReadNumber=[&](){
-		for(uint i=0;i<8;i++)parser.bits[i]=(uchar)in.get();
+		for(uint i=0;i<sizeof(double)/sizeof(uchar);i++)parser.bits[i]=(uchar)in.get();
 		return parser.x;
 	};
 	auto ReadString=[&](){
@@ -3785,12 +4255,12 @@ void ReadByteCode(const string&file,CodeSet&mainBlock){
 	
 	uint magicNumber=ReadUint();
 	if(magicNumber!=MAGIC_NUMBER){
-		THROW(SYSTEM_ERROR,FORMAT("malformed or broken bytefile (magic number: %0X8)",magicNumber));
+		THROW(SYSTEM_EXCEPTION,FORMAT("malformed or broken bytefile (magic number: %0X8)",magicNumber));
 	} 
 	
 	uint versionCode=ReadUint();
 	if(versionCode>VERSION_CODE){
-		THROW(SYSTEM_ERROR,FORMAT("not compatible version (bytecode: %0X8, vm: %0X8)",versionCode,VERSION_CODE));
+		THROW(SYSTEM_EXCEPTION,FORMAT("not compatible version (bytecode: %0X8, vm: %0X8)",versionCode,VERSION_CODE));
 	}
 	
 	uint glbvCount,builtinCount;
@@ -3956,6 +4426,8 @@ void R_Cli(){
 			tokens.clear();
 			currentTokenIndex=0;
 			memset(leftSyms,0,sizeof(leftSyms));
+            usedFnCount.resize(1);
+	        fnDeclStack.clear();
 			string line,single;
 			
 			do{
@@ -3974,17 +4446,16 @@ void R_Cli(){
 			RunCode(STACK,STACK,&fn,&ENV);
 		}
 		catch(Value&s){
-			cout<<"RUNTIME ERROR: "<<s.ToStr()<<endl;
+			cout<<"Runtime Exception:"<<endl<<"    "<<s.ToStr()<<endl;
 		}
 		catch(string&s){
 			cout<<"Line "<<tok.line<<", column "<<tok.column<<": "<<s<<endl;
-			exit(0);
 		}
 	}
 }
 
+uint glbvCount,builtinCount;
 void R_Compile(const string&file,const string&out){
-	uint glbvCount,builtinCount;
 	CodeSet mainBlock;
 	try{
 		string s;
@@ -4016,10 +4487,10 @@ void R_Run(const string&file){
 		unsigned b=clock(); 
 		Fn fn=Fn(&fnInfo);
 		RunCode(STACK,STACK,&fn,&ENV);
-		printf("Elapsed: %dms",(int)(clock()-b));
+		if(DEBUG_MODE)printf("Elapsed: %dms",(int)(clock()-b));
 	}
 	catch(Value&s){
-		cout<<"RUNTIME ERROR: "<<s.ToStr()<<endl;
+		cout<<"Runtime Exception:"<<endl<<"    "<<s.ToStr()<<endl;
 	}
 }
 
@@ -4095,6 +4566,9 @@ int main(int argc,char** argv){
 				i++;
 				if(i>=argc)HelpHint("expected output file name after -o argument");
 				path=argv[i];
+			}
+			else if((string)argv[i]=="-debug"){
+				DEBUG_MODE=true;
 			}
 			else{
 				if((i==1)&&(argc==2||((string)argv[2]=="-"))){
