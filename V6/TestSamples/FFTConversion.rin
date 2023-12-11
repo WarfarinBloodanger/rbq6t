@@ -1,0 +1,86 @@
+in=open('input.txt','r')
+
+a=[]
+b=[]
+c=[]
+rev=[]
+
+n=readNumber(in)+1
+m=readNumber(in)+1
+
+len=1
+while(len<n+m)len=len<<1
+rev.Resize(len)
+rev.Fill(0)
+for(i=0;i<len;i=i+1){
+    rev[i]=(rev[i>>1]>>1)|((i&1)?len>>1:0)
+}
+
+a.Resize(len+1)
+b.Resize(len+1)
+c.Resize(len+1)
+a.Fill(0)
+b.Fill(0)
+c.Fill(0)
+for(i=0;i<n;i=i+1)a[i]=readNumber(in)
+for(i=0;i<m;i=i+1)b[i]=readNumber(in)
+
+function Complex(real:number,img:number){
+    return {
+        '__type__':'Complex',
+        'real':real,
+        'img':img,
+        'ToString':fn='{0} + {1}i'.Format(this.real,this.img),
+        '__add__':fn b:Complex=Complex(this.real+b.real,this.img+b.img),
+        '__sub__':fn b:Complex=Complex(this.real-b.real,this.img-b.img),
+        '__mul__':fn b:Complex=Complex(
+            this.real*b.real-this.img*b.img,
+            this.real*b.img+this.img*b.real
+        ),
+        'MulE':function(b:Complex){
+            var v=this.real*b.real-this.img*b.img
+            var k=this.real*b.img+this.img*b.real
+            this.real=v
+            this.img=k
+        }
+    }
+}
+function FFT(a,n,f){
+    for(i=0;i<n;i=i+1){
+        if(i<rev[i]){
+            var t=a[i]
+            a[i]=a[rev[i]]
+            a[rev[i]]=t
+        }
+    }
+    for(k=2;k<=n;k=k<<1){
+        wn=Complex(cos(2*PI/k),f*sin(2*PI/k))
+        for(i=0;i<n;i=i+k){
+            w=Complex(1,0)
+            for(j=i;j<i+k/2;j=j+1){
+                u=a[j]
+                t=w*a[j+k/2]
+                a[j]=u+t
+                a[j+k/2]=u-t
+                w.MulE(wn)
+            }
+        }
+    }
+    return 0
+}
+function PolyMul(a,b,n){
+    FFT(a,n,1)
+    FFT(b,n,1)
+    for(i=0;i<n;i=i+1)c[i]=a[i]*b[i]
+    FFT(c,n,-1)
+    return 0
+}
+
+a.Map(fn x=Complex(x,0))
+b.Map(fn x=Complex(x,0))
+PolyMul(a,b,len)
+for(i=0;i<n+m-1;i=i+1){
+    x=c[i].real
+    print(floor(x/len+0.5))
+}
+close(in)
