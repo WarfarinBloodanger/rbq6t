@@ -1073,7 +1073,7 @@ void Opt_Expr(CodeSet&context){
 	if((*last).type==POP){
 		last++;
 		uchar t=(*last).type;
-		if(t==STOREGLOBALSMI||t==STORELOCALSMI||t==STOREADDRSMI||t==STOREATTRSMI){
+		if(t==STOREGLOBALSMI||t==STORELOCALSMI||t==STOREUPVALUESMI){
 			context.pop_back();
 		}
 	}
@@ -1247,8 +1247,10 @@ CodeSet Expr(uint precd){
 			// subscript
 			case TOK_LBK:{
 				nextToken();
-				concat(c,Expr(0));
-				c.Add(GETADDR);
+				CodeSet v=Expr(0);
+				concat(c,v);
+				if(v.size()==1&&v[0].type==SMI)c.back().type=GETADDRSMI;
+				else c.Add(GETADDR);
 				readToken(TOK_RBK);
 				break;
 			}
@@ -1284,28 +1286,63 @@ CodeSet Expr(uint precd){
 				c.Add(Instr(NOP));
                 break;
             }
-			case TOK_ASS:{
+			case TOK_ASS:
+			case TOK_ADDE:case TOK_SUBE:case TOK_MULE:case TOK_DIVE:case TOK_MODE:
+			case TOK_XORE:case TOK_BITANDE:case TOK_BITORE:case TOK_LSHFE:case TOK_RSHFE:{
+				auto assignType=tok.type;
 				nextToken();
 				CodeSet v=Expr(priority(TOK_ASS));
-				switch(c.back().type){
-					#define REP(code1,code2)\
+				auto lastInstr=c.back();
+				switch(lastInstr.type){
+					#define CHECK_IF_DUP() if(lastInstr.type==GETADDR||lastInstr.type==GETATTR)c.back()=Instr(DUPTOP2),c.Add(lastInstr);
+					#define EXPAND_ASSIGNMENT(code1,code2,codesmi)\
 					case code1:{\
-						uint x=c.back().x;\
+						switch(assignType){\
+							case TOK_ADDE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=ADDE;else c.Add(Instr(ADD));c.Add(lastInstr);break;\
+							case TOK_SUBE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=SUBE;else c.Add(Instr(SUB));c.Add(lastInstr);break;\
+							case TOK_MULE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=MULE;else c.Add(Instr(MUL));c.Add(lastInstr);break;\
+							case TOK_DIVE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=DIVE;else c.Add(Instr(DIV));c.Add(lastInstr);break;\
+							case TOK_MODE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=MODE;else c.Add(Instr(MOD));c.Add(lastInstr);break;\
+							case TOK_XORE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=XORE;else c.Add(Instr(XOR));c.Add(lastInstr);break;\
+							case TOK_LSHFE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=LSHFE;else c.Add(Instr(LSHF));c.Add(lastInstr);break;\
+							case TOK_RSHFE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=RSHFE;else c.Add(Instr(RSHF));c.Add(lastInstr);break;\
+							case TOK_BITORE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=BITORE;else c.Add(Instr(BITORE));c.Add(lastInstr);break;\
+							case TOK_BITANDE:CHECK_IF_DUP();concat(c,v);if(v.size()==1&&v[0].type==SMI)c.back().type=BITANDE;else c.Add(Instr(BITAND));c.Add(lastInstr);break;\
+							default:break;\
+						}\
+						uint x=lastInstr.x;\
 						c.pop_back();\
-						concat(c,v);\
-						c.Add(Instr(code2,x));\
+						if(assignType==TOK_ASS){\
+							concat(c,v);\
+							if(code1==GETADDR){\
+								if(v.size()==1&&v[0].type==SMI){\
+									c.back().type=codesmi;\
+								}\
+								else c.Add(Instr(code2,x)); \
+							}\
+							else{\
+								if(v.size()==1&&v[0].type==SMI&&v[0].x<65536&&x<65536){\
+									c.pop_back();\
+									c.Add(Instr(codesmi,(ushort)x,(ushort)v[0].x));\
+								}\
+								else c.Add(Instr(code2,x));\
+							}\
+						}\
+						else c.Add(Instr(code2,x));\
 						break;\
 					}
-					REP(LOADGLOBAL,STOREGLOBAL)
-					REP(LOADVAR,STORELOCAL)
-					REP(LOADUPVALUE,STOREUPVALUE) 
-					REP(GETADDR,STOREADDR)
-					REP(GETATTR,STOREATTR) 
+					EXPAND_ASSIGNMENT(LOADGLOBAL,STOREGLOBAL,STOREGLOBALSMI)
+					EXPAND_ASSIGNMENT(LOADVAR,STORELOCAL,STORELOCALSMI)
+					EXPAND_ASSIGNMENT(LOADUPVALUE,STOREUPVALUE,STOREUPVALUESMI) 
+					EXPAND_ASSIGNMENT(GETADDR,STOREADDR,STOREADDR_VALSMI)
+					EXPAND_ASSIGNMENT(GETADDRSMI,STOREADDR_IDXSMI,STOREADDR_SMI_SMI)
+					EXPAND_ASSIGNMENT(GETATTR,STOREATTR,STOREATTRSMI) 
+					EXPAND_ASSIGNMENT(GETTHISATTR,STORETHISATTR,STORETHISATTRSMI) 
 					default:{
 						SYNTAX_ERR("invalid left%cvalue in assignment",' ');
 						break;
 					}
-					#undef REP
+					#undef EXPAND_ASSIGNMENT
 				}
 				break;
 			}
@@ -1333,6 +1370,18 @@ CodeSet Expr(uint precd){
 						c.Add(Instr(INVOKE,argsCnt));
 						break;
 					}
+					case GETATTR:{
+						c.back().type=STRSLOT;
+						concat(c,args);
+						c.Add(Instr(INVOKE,argsCnt));
+						break;
+					}
+					case GETTHISATTR:{
+						c.back().type=STRSLOT;
+						concat(c,args);
+						c.Add(Instr(INVOKETHIS,argsCnt));
+						break;
+					}
 					default:{
 						concat(c,args);
 						c.Add(Instr(CALL,argsCnt));
@@ -1346,8 +1395,10 @@ CodeSet Expr(uint precd){
 				
 				string attrName=nextToken().val;
 				if(!isalpha(attrName[0]))SYNTAX_ERR("'%s' is not an valid attribute name",attrName.c_str());
+				bool thisAttr=c.back().type==LOADTHIS;
+				if(thisAttr)c.pop_back();
 				concat(c,String("'"+attrName+"'"));
-				c.Add(Instr(GETADDR));
+				c.back().type=thisAttr?GETTHISATTR:GETATTR;
 				break;
 			}
 			case TOK_RPR:case TOK_RBK:case TOK_RBR:return c;
@@ -1454,7 +1505,7 @@ CodeSet MkFor(){
 	CodeSet step=Stmt();
 	
 	readToken(TOK_RPR);
-	s.emplace_back(Instr(LJUMP_IF_FALSE,endLabel.getIntOp()));
+	Opt_LJIF(s,endLabel.getIntOp());
 	loops.emplace_back(make_pair(stepLabel.getIntOp(),endLabel.getIntOp()));
 	concat(s,Stmt());
 	loops.pop_back();
@@ -1672,10 +1723,12 @@ CodeSet Stmt(bool top){
 				}
 				REP(LOADGLOBAL,STOREGLOBAL)
 				REP(LOADVAR,STORELOCAL)
+				REP(LOADUPVALUE,STOREUPVALUE)
 				REP(GETADDR,STOREADDR)
 				REP(GETATTR,STOREATTR)
+				REP(GETTHISATTR,STORETHISATTR)
 				default:{
-					SYNTAX_ERR("invalid left%cvalue in assignment",' ');
+					SYNTAX_ERR("invalid left%cvalue in assignment (from function declaration)",' ');
 					break;
 				}
 				#undef REP
@@ -2541,19 +2594,6 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     				PUSH(Value(NUMBER_CONSTANT_VALUE[ins.x]));
     				BACK();
     			}
-    			case GETADDRSMI:{
-    				switch(TOP().type){
-    					case TYPE_STR:{
-    						TOP()=string("")+(*(TOP().obj->str))[ins.x];
-    						BACK();
-    					}
-    					case TYPE_ARR:{
-    						TOP()=((*(TOP().obj->arr))[ins.x]);
-    						BACK();
-    					}
-    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
-    				}
-    			}
     			case GETADDR:{
     				if(TOP().type==TYPE_STR&&HasBuiltinAttribute(TOP_2(),*TOP().obj->str)){
     					TOP_2()=GetBuiltinAttribute(TOP_2(),*TOP().obj->str); 
@@ -2579,9 +2619,46 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
     				}
     			}
+    			case GETADDRSMI:{
+    				switch(TOP().type){
+    					case TYPE_STR:{
+    						TOP()=GetStringIndex((*(TOP().obj->str)),ins.x);
+    						BACK();
+    					}
+    					case TYPE_ARR:{
+    						TOP()=GetArrayIndex((TOP().obj->arr),ins.x);
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						TOP()=((*(TOP().obj->dict))[ins.x]);
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
+    				}
+    			}
+    			case GETATTR:{
+    				if(HasBuiltinAttribute(TOP(),STRING_CONSTANT_VALUE[ins.x])){
+	    				TOP()=GetBuiltinAttribute(TOP(),STRING_CONSTANT_VALUE[ins.x]); 
+	    				BACK();
+    				}
+    				else switch(TOP().type){
+    					case TYPE_STR:{
+    						TOP()=GetStringIndex((*(TOP().obj->str)),STRING_CONSTANT_VALUE[ins.x]);
+    						BACK();
+    					}
+    					case TYPE_ARR:{
+    						TOP()=GetArrayIndex((TOP().obj->arr),STRING_CONSTANT_VALUE[ins.x]);
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						TOP()=((*(TOP().obj->dict))[STRING_CONSTANT_VALUE[ins.x]]);
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
+    				}
+    			}
     			case INVOKE:{
     				uint argc=ins.x;
-    				
     				ValueRef owner=&SEEK(argc+2);
     				Value index=SEEK(argc+1);
     				Value func;
@@ -2613,6 +2690,39 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     				TOP()=value;
     				BACK();
     			}
+    			case INVOKETHIS:{
+    				uint argc=ins.x;
+    				ValueRef owner=thisObject;
+    				Value index=SEEK(argc+1);
+    				Value func;
+    				if(index.type==TYPE_STR&&HasBuiltinAttribute(*owner,*index.obj->str)){
+    					func=GetBuiltinAttribute(*owner,*index.obj->str); 
+    				}
+    				else switch(owner->type){
+    					case TYPE_STR:{
+    						func=GetStringIndex((*(owner->obj->str)),index);
+    						break;
+    					}
+    					case TYPE_ARR:{
+    						func=GetArrayIndex((owner->obj->arr),index);
+    						break;
+    					}
+    					case TYPE_MAP:{
+    						func=((*(owner->obj->dict))[index]);
+    						break;
+    					}
+    					default:THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
+    				}
+    				
+    				if(func.type!=TYPE_FUNC){
+    					THROW(TYPE_EXCEPTION,FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
+    				}
+    				
+    				Value value=func.obj->fn->CallFunc(esp-argc,argc,esp,owner);
+    				POP_SLOTS(argc);
+    				TOP()=value;
+    				BACK();
+    			}
     			case STOREADDR:{
     				switch(TOP_3().type){
     					case TYPE_ARR:{
@@ -2629,6 +2739,96 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     					case TYPE_MAP:{
     						((*(TOP_3().obj->dict))[TOP_2()])=TOP_1();
     						TOP_3()=TOP_1(); POP_SLOTS(2); 
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP_3().GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case STOREADDR_VALSMI:{
+    				switch(TOP_2().type){
+    					case TYPE_ARR:{
+    					    vector<Value>*arr=TOP_2().obj->arr;
+    					    if(TOP_1().type!=TYPE_NUM)THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",TOP_1().GetTypeName().c_str()));
+    					    
+    					    int idx=TOP_1().num;
+			                if(!CheckIndex(idx,arr->size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",idx));
+    					    if(idx<0)idx+=arr->size();
+    						TOP_2()=((*arr)[idx])=Value(ins.x);
+    						POP_SLOTS(1); 
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						((*(TOP_2().obj->dict))[TOP_1()])=Value(ins.x);
+    						TOP_2()=Value(ins.x); POP_SLOTS(1); 
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP_2().GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case STOREADDR_IDXSMI:{
+    				switch(TOP_2().type){
+    					case TYPE_ARR:{
+    					    vector<Value>*arr=TOP_2().obj->arr;
+    					    int idx=ins.x;
+			                if(!CheckIndex(idx,arr->size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",idx));
+    					    if(idx<0)idx+=arr->size();
+    						((*arr)[idx])=TOP_1();
+    						TOP_2()=TOP_1(); POP_SLOTS(1); 
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						((*(TOP_2().obj->dict))[Value(ins.x)])=TOP_1();
+    						TOP_2()=TOP_1(); POP_SLOTS(1); 
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP_2().GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case STOREADDR_SMI_SMI:{
+    				switch(TOP().type){
+    					case TYPE_ARR:{
+    					    vector<Value>*arr=TOP().obj->arr;
+    					    int idx=ins._o[0];
+			                if(!CheckIndex(idx,arr->size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",idx));
+    					    if(idx<0)idx+=arr->size();
+    						TOP()=((*arr)[idx])=Value(ins._o[1]);
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						((*(TOP().obj->dict))[Value(ins._o[0])])=Value(ins._o[1]);
+    						TOP()=Value(ins._o[1]);
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP().GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case STOREATTR:{
+    				Value attr=STRING_CONSTANT_VALUE[ins.x];
+    				switch(TOP_2().type){
+    					case TYPE_ARR:{
+    					    THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",attr.GetTypeName().c_str()));
+    					}
+    					case TYPE_MAP:{
+    						((*(TOP_2().obj->dict))[attr])=TOP();
+    						TOP_2()=TOP(); POP_SLOTS(1); 
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP_2().GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case STOREATTRSMI:{
+    				Value attr=STRING_CONSTANT_VALUE[ins._o[0]];
+    				switch(TOP().type){
+    					case TYPE_ARR:{
+    					    THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",attr.GetTypeName().c_str()));
+    					}
+    					case TYPE_MAP:{
+    						((*(TOP().obj->dict))[attr])=Value(ins._o[1]);
     						BACK();
     					}
     					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",TOP().GetTypeName().c_str()));
@@ -2669,6 +2869,55 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     				PUSH(*thisObject);
     				BACK();
     			}
+    			case GETTHISATTR:{
+    				if(HasBuiltinAttribute(*thisObject,STRING_CONSTANT_VALUE[ins.x])){
+	    				PUSH(GetBuiltinAttribute(*thisObject,STRING_CONSTANT_VALUE[ins.x]));
+	    				BACK();
+    				}
+    				else switch(thisObject->type){
+    					case TYPE_STR:{
+    						PUSH(GetStringIndex((*(thisObject->obj->str)),STRING_CONSTANT_VALUE[ins.x]));
+    						BACK();
+    					}
+    					case TYPE_ARR:{
+    						PUSH(GetArrayIndex((thisObject->obj->arr),STRING_CONSTANT_VALUE[ins.x]));
+    						BACK();
+    					}
+    					case TYPE_MAP:{
+    						PUSH((*(thisObject->obj->dict))[STRING_CONSTANT_VALUE[ins.x]]);
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",thisObject->GetTypeName().c_str()));
+    				}
+    			}
+    			case STORETHISATTR:{
+    				Value attr=STRING_CONSTANT_VALUE[ins.x];
+    				switch(thisObject->type){
+    					case TYPE_ARR:{
+    					    THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",thisObject->GetTypeName().c_str()));
+    					}
+    					case TYPE_MAP:{
+    						((*(thisObject->obj->dict))[attr])=TOP();
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",thisObject->GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
+    			case STORETHISATTRSMI:{
+    				Value attr=STRING_CONSTANT_VALUE[ins._o[0]];
+    				switch(thisObject->type){
+    					case TYPE_ARR:{
+    					    THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",thisObject->GetTypeName().c_str()));
+    					}
+    					case TYPE_MAP:{
+    						((*(thisObject->obj->dict))[attr])=Value(ins._o[1]);
+    						BACK();
+    					}
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able or is not editable",thisObject->GetTypeName().c_str()));
+    				}
+    				BACK();
+    			}
     			case LOADGLOBAL:{
     				PUSH(GLBV[ins.x]);
     				BACK();
@@ -2697,8 +2946,16 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     				bottom[ins.x]=TOP_1();
     				BACK();
     			}
+    			case STORELOCALSMI:{
+    				bottom[ins._o[0]]=Value(ins._o[1]);
+    				BACK();
+    			}
     			case STOREUPVALUE:{
     				*(realUpv[ins.x].value)=TOP_1();
+    				BACK();
+    			}
+    			case STOREUPVALUESMI:{
+    				*(realUpv[ins.x].value)=Value(ins._o[1]);
     				BACK();
     			}
     			case ADD:{
@@ -2937,6 +3194,11 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     			    THROW(reason.ToStr(),except.ToStr());
     				BACK();
     			}
+    			case DUPTOP2:{
+    				PUSH(TOP_2());
+    				PUSH(TOP_2());
+					BACK();
+				}
     			case RETURN:{
     				retVal=TOP();
     				goto RETURN_STAGE;
@@ -3244,7 +3506,7 @@ BT_FUNC(GC){
 	GC();
 	return Value();
 }
-BT_FUNC(Loads){
+BT_FUNC(Json){
 	if(argc!=1)ARGC_ERR(0,"json");
 	if(ARG(0).type!=TYPE_STR)ARG_TYPE_ERR(0,"string","json");
 	return JSONParser::Loads(*ARG(0).obj->str);
@@ -3260,7 +3522,7 @@ BT_FUNC(Close){
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","close");
 	return Value(file_manager::file_close(ARG(0).num));
 }
-BT_FUNC(EOF){
+BT_FUNC(Eof){
 	if(argc!=1)ARGC_ERR(1,"eof");
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","eof");
 	return Value(file_manager::file_eof(ARG(0).num));
@@ -3292,7 +3554,7 @@ BT_FUNC(ReadChar){
 }
 BT_FUNC(Write){
 	if(argc!=2)ARGC_ERR(2,"Write");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","Write");
+	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","write");
 	return Value(file_manager::fwrite_string(ARG(0).num,ARG(1).ToStr()));
 }
 BT_FUNC(loadDll){
@@ -3323,15 +3585,15 @@ BT_FUNC(loadDll){
 #define MATH_FN(name)\
 BT_FUNC(name){\
 	if(argc!=1)ARGC_ERR(1,#name);\
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","Write");\
+	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number",#name);\
 	return name(ARG(0).num);\
 }
 
 #define MATH_FN_2(name)\
 BT_FUNC(name){\
 	if(argc!=2)ARGC_ERR(2,#name);\
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","Write");\
-	if(ARG(1).type!=TYPE_NUM)ARG_TYPE_ERR(1,"number","Write");\
+	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number",#name);\
+	if(ARG(1).type!=TYPE_NUM)ARG_TYPE_ERR(1,"number",#name);\
 	return name(ARG(0).num,ARG(1).num);\
 }
 
@@ -3737,9 +3999,14 @@ vector<string> cmdArgs;
 
 void SetupFuncs(){
 	uint bdidx=0;
+	auto patch=[](string s){
+		if(s[0]>='A'&&s[0]<='Z')s[0]+='a'-'A';
+		return s;
+	};
+	
 	#define BUILTIN(func)\
 	BUILTIN_VAR[bdidx].type=TYPE_FUNC;\
-	BUILTIN_VAR[bdidx].obj=NewBuiltinFunc(Builtin_##func,#func);\
+	BUILTIN_VAR[bdidx].obj=NewBuiltinFunc(Builtin_##func,patch(#func));\
 	bdidx++
 	
 	#define BUILTIN_VALUE(_value)\
@@ -3748,10 +4015,10 @@ void SetupFuncs(){
 	
 	BUILTIN(print);
 	BUILTIN(GC);
-	BUILTIN(Loads);
+	BUILTIN(Json);
 	BUILTIN(Open);
 	BUILTIN(Close);
-	BUILTIN(EOF);
+	BUILTIN(Eof);
 	BUILTIN(Read);
 	BUILTIN(ReadLine);
 	BUILTIN(ReadNumber);
