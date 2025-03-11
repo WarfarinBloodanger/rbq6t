@@ -3820,9 +3820,10 @@ BT_FUNC(ArrSort){
 	return 0.0f;
 }
 BT_FUNC(ArrResize){
-	if(argc!=1)ARGC_ERR(1,"array.Resize");
+	if(argc!=1&&argc!=2)ARGC_ERR_2("1 or 2","array.Resize");
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","array.Resize");
-	thisObject->obj->arr->resize(ARG(0).num);
+	Value filling=argc==2?ARG(1):Value();
+	thisObject->obj->arr->resize(ARG(0).num,filling);
 	return Value();
 }
 BT_FUNC(ArrAny){
