@@ -1879,8 +1879,7 @@ bool HasAttribute(const ValueRef&val,const string&key);
 typedef Value (*NativeFunction)(rbq_env* env,ValueRef thisObject,Value* argv,int argc);
 
 typedef enum{
-	TYPE_UNDEF=0,
-	TYPE_NULL,
+	TYPE_NULL=0,
 	TYPE_NUM,
 	TYPE_STR,
 	TYPE_ARR,
@@ -1890,7 +1889,6 @@ typedef enum{
 } ValueType;
 
 const string TYPE_NAME[]={
-	"undefined",
 	"null",
 	"number",
 	"string",
@@ -1920,7 +1918,7 @@ struct Value{
 		return ValType2Str((const ValueRef)this);
 	}
 	Value(){
-		type=TYPE_UNDEF;
+		type=TYPE_NULL;
 	}
 	Value(double _num){
 		type=TYPE_NUM;
@@ -2067,7 +2065,6 @@ struct Value{
 		switch(type){
 			case TYPE_NUM:return num;
 			case TYPE_NULL:return false;
-			case TYPE_UNDEF:return false;
 			default:return true;
 		}
 	}
@@ -2585,6 +2582,11 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     				cout<<"unknown instr at "<<ip<<endl;
     				cout<<ins<<endl;
     				break;
+    			}
+    			case LOADNULL:{
+    				Value v;v.type=TYPE_NULL;
+    				PUSH(v);
+    				BACK();
     			}
     			case STRSLOT:{
     				PUSH(Value(STRING_CONSTANT_VALUE[ins.x]));
@@ -3155,8 +3157,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     				BACK();
     			}
     			case PRINT:{
-    				cout<<TOP().ToStr()<<endl;
-    				POPSTACK();
+    				if((esp-1)>=_bottom)cout<<TOP().ToStr()<<endl,POPSTACK();
     				BACK();
     			}
     			case TYPEOF:{
@@ -3284,8 +3285,9 @@ namespace JSONParser{
 			else CHECK_SYMBOL(']',RBK)
 			else CHECK_SYMBOL(',',COM)
 			else CHECK_SYMBOL(':',COL)
-			else if(isdigit(src[loc])||src[loc]=='.'){
+			else if(isdigit(src[loc])||src[loc]=='.'||src[loc]=='-'){
 				bool d=0,e=0,n=0;
+				while(src[loc]=='-')cur.val.push_back(src[loc]),nextchar();
 				if(src[loc]=='0'&&loc+1<len&&(src[loc+1]=='x'||src[loc+1]=='X')){
 					cur.val.push_back(src[loc]),nextchar();
 					cur.val.push_back(src[loc]),nextchar();
@@ -3384,10 +3386,10 @@ namespace JSONParser{
 
 namespace strutils{
 	inline string substring(const string&s,const Value&from,const Value&to){
-		if(from.type==TYPE_UNDEF&&to.type==TYPE_UNDEF)return s;
+		if(from.type==TYPE_NULL&&to.type==TYPE_NULL)return s;
 		if(from.type!=TYPE_NUM)THROW(INDEX_EXCEPTION,FORMAT("should not use '%s' as substring indice",from.ToStr().c_str()));
 		int a=from.num,b=0;
-		if(to.type==TYPE_UNDEF)b=s.size()-1;
+		if(to.type==TYPE_NULL)b=s.size()-1;
 		else if(to.type==TYPE_NUM)b=to.num;
 		else THROW(INDEX_EXCEPTION,FORMAT("should not use '%s' as substring indice",to.ToStr().c_str()));
 		a=a<0?0:a,b=b<0?0:b,b=(unsigned int64_t)b>=s.size()?s.size()-1:b;
@@ -3470,7 +3472,7 @@ namespace strutils{
 	}
 	inline int indexof(const string&_,const string&rpl,const Value&from){
 		int start=0;
-		if(from.type==TYPE_UNDEF)start=0;
+		if(from.type==TYPE_NULL)start=0;
 		else if(from.type==TYPE_NUM)start=from.num;
 		else THROW(INDEX_EXCEPTION,FORMAT("should not use '%s' as indice",from.ToStr().c_str()));
 		start=start<0?0:start,start=(unsigned int64_t)start>=_.size()?_.size()-1:start; 
@@ -3495,8 +3497,8 @@ THROW(TYPE_EXCEPTION,FORMAT("expected type '%s' for argument %d when calling %s,
 
 BT_FUNC(print){
 	for(uint i=0;i<argc;i++){
-		cout<<ARG(i).ToStr();
 		if(i)cout<<' '; 
+		cout<<ARG(i).ToStr();
 	}
 	cout<<endl;
 	return argc;
@@ -3869,7 +3871,7 @@ BT_FUNC(ArrTrim){
 	if(argc!=0)ARGC_ERR(0,"array.Trim");
 	vector<Value>*arr=(thisObject->obj->arr);
 	double cnt=0;
-	while(arr->size()&&arr->back().type==TYPE_UNDEF)arr->pop_back(),cnt++; 
+	while(arr->size()&&arr->back().type==TYPE_NULL)arr->pop_back(),cnt++; 
 	return Value(cnt);
 }
 BT_FUNC(ArrMap){
@@ -4141,7 +4143,7 @@ namespace GarbageCollector{
 void MarkObject(ObjectRef ref);
 void MarkValue(ValueRef ref){
 	switch(ref->type){
-		case TYPE_NUM:case TYPE_UNDEF:case TYPE_NULL:return;
+		case TYPE_NUM:case TYPE_NULL:return;
 		default:{
 			MarkObject(ref->obj);
 			return;
