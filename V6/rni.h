@@ -13,7 +13,6 @@ char excpbuf[1024];
 #define FORMAT(str,...) (sprintf(excpbuf,str,__VA_ARGS__),excpbuf)
 
 typedef enum{
-	TYPE_UNDEF=0,
 	TYPE_NULL,
 	TYPE_NUM,
 	TYPE_STR,
@@ -90,12 +89,12 @@ typedef struct{
 }rbq_env;
 
 #define rbq_inner_native_func(name)\
-Value __declspec(dllexport) name(void* __env,ValueRef _this,Value* args,int argc)
+Value __declspec(dllexport) name(void* __env,ValueRef _this,Value* argv,int argc)
 
 #define env ((rbq_env*)(__env))
 
 #define rbq_native_func(name)\
-Value __declspec(dllexport) name(rbq_env* __env,ValueRef _this,Value* args,int argc)
+Value __declspec(dllexport) name(rbq_env* __env,ValueRef _this,Value* argv,int argc)
 
 
 #define CHECK_ARGS_TYPE(argno,_type)\
