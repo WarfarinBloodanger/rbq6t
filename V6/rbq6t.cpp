@@ -75,12 +75,23 @@
 #include<set>
 #include<fstream>
 
+#include <stdio.h>
+#include <string.h>
+
 #ifdef _WIN32
-#include<windows.h>
-#elif __linux__
-#include <dlfcn.h>
+    #include<windows.h>
+    #define LIB_HANDLE HMODULE
+    #define LOAD_LIB(name) LoadLibrary(name)
+    #define GET_SYM(handle,sym) GetProcAddress(handle,sym)
+    #define CLOSE_LIB(handle) FreeLibrary(handle)
+    #define GET_ERROR() std::to_string(GetLastError()).c_str()
 #else
-#error rbqscript 6 turbo can only be used on Windows or Linux
+    #include<dlfcn.h>
+    #define LIB_HANDLE void*
+    #define LOAD_LIB(name) dlopen(name, RTLD_LAZY)
+    #define GET_SYM(handle,sym) DLSYM(handle,sym)
+    #define CLOSE_LIB(handle) dlclose(handle)
+    #define GET_ERROR() dlerror()
 #endif
 
 using namespace std;
@@ -408,45 +419,100 @@ inline bool isheader(char c){
 }
 using namespace utils;
 
-const uint MAX_FILE_CNT=1024*4;
 namespace file_manager{
-	char fbuffer[2048];
-	FILE *file_ptrs[MAX_FILE_CNT];
-	int size;
+	#define CHECK_FILE_ERR() if(ferror(file_ptrs[handle]))THROW(IO_EXCEPTION,FORMAT("%s",strerror(errno)))
+	vector<FILE*>file_ptrs;
 	inline int file_open(string file,string mode="r") {
 		bool write=false;
 		if(strchr(mode.c_str(),'w')!=NULL)write=true;
 		FILE *ptr=fopen(file.c_str(),mode.c_str());
-		if(ptr==NULL){
-			if(write){ofstream fcout(file.c_str());fcout.close();}
-			else THROW(IO_EXCEPTION,FORMAT("%s",(("File doesn't exist: "+file).c_str())));
-		}
-		file_ptrs[size++]=ptr;
-		return size-1;
+		if(!ptr)THROW(IO_EXCEPTION,FORMAT("%s",strerror(errno)));
+		file_ptrs.push_back(ptr);
+		return file_ptrs.size()-1;
 	}
-	inline void check_handle(int handle){if(handle<0||handle>=size)THROW(IO_EXCEPTION,FORMAT("%s",(("Invalid handle: "+num2str(handle)).c_str())));}
-	inline bool file_close(int handle){check_handle(handle);return fclose(file_ptrs[handle]);}
-	inline bool file_eof(int handle){check_handle(handle);return feof(file_ptrs[handle]);}
-	inline string fread_string(int handle){check_handle(handle);fscanf(file_ptrs[handle],"%s",fbuffer);return fbuffer;}
+	inline void check_handle(int handle){
+		if(handle<0||handle>=file_ptrs.size()){
+			THROW(IO_EXCEPTION,"Invalid FILE handle");
+		}
+		if(!file_ptrs[handle]){
+			THROW(IO_EXCEPTION,"FILE handle has been closed");
+		}
+	}
+	inline int file_close(int handle){
+		check_handle(handle);
+		auto ret=fclose(file_ptrs[handle]);
+		file_ptrs[handle]=NULL;
+		return ret;
+	}
+	inline long long ftell_(int handle){
+		check_handle(handle);
+		auto ret=ftell(file_ptrs[handle]);
+		CHECK_FILE_ERR();
+		return ret;
+	}
+	inline int fseek_(int handle,long long pos,const string&place){
+		check_handle(handle);
+		auto ret=0;
+		if(place=="set"||place=="SET")ret=fseek(file_ptrs[handle],pos,SEEK_SET);
+		else if(place=="cur"||place=="CUR")ret=fseek(file_ptrs[handle],pos,SEEK_CUR);
+		else if(place=="end"||place=="END")ret=fseek(file_ptrs[handle],pos,SEEK_END);
+		else THROW(ARGUMENT_EXCEPTION,FORMAT("invalid seek origin '%s', expected 'set', 'cur' or 'end'",place.c_str()));
+		CHECK_FILE_ERR();
+		return ret;
+	}
+	inline int file_eof(int handle){
+		check_handle(handle);
+		auto ret=feof(file_ptrs[handle]);
+		CHECK_FILE_ERR();
+		return ret;
+	}
+	inline string fread_(int handle,int size){
+		check_handle(handle);
+		string str;
+		str.resize(size);
+		str.resize(fread(&str[0],1,size,file_ptrs[handle]));
+		CHECK_FILE_ERR();
+		return str;
+	}
+	inline string fread_string(int handle){
+		check_handle(handle);string result="";
+		char c=fgetc(file_ptrs[handle]);
+		while(!isspace(c)&&!feof(file_ptrs[handle]))result+=c,c=fgetc(file_ptrs[handle]);
+		CHECK_FILE_ERR();
+		return result;
+	}
 	inline string fread_line(int handle){
 		check_handle(handle);string result="";
 		char c=fgetc(file_ptrs[handle]);
-		while(c!='\n'&&!feof(file_ptrs[handle]))result+=c,c=fgetc(file_ptrs[handle]);
+		while(c!='\n'&&c!='\r'&&!feof(file_ptrs[handle]))result+=c,c=fgetc(file_ptrs[handle]);
+		CHECK_FILE_ERR();
 		return result;
 	}
-	int fwrite_string(int handle,string text){check_handle(handle);int ret=fprintf(file_ptrs[handle],"%s",text.c_str());fflush(file_ptrs[handle]);return ret;}
-	inline double fread_number(int handle){check_handle(handle);return atof(fread_string(handle).c_str());}
+	int fwrite_string(int handle,const string&text){
+		check_handle(handle);
+		int ret=fprintf(file_ptrs[handle],"%s",text.c_str());
+		CHECK_FILE_ERR();
+		fflush(file_ptrs[handle]);
+		return ret;
+	}
+	inline double fread_number(int handle){
+		check_handle(handle);
+		auto ret=atof(fread_string(handle).c_str());
+		CHECK_FILE_ERR();
+		return ret;	
+	}
 	inline unsigned int fread_char(int handle){
 		check_handle(handle);
 		unsigned char c=fgetc(file_ptrs[handle]);
+		CHECK_FILE_ERR();
 		return c;
 	}
-	inline void fwrite_char(int handle,unsigned char x){check_handle(handle);fwrite(&x,sizeof(x),1,file_ptrs[handle]);fflush(file_ptrs[handle]);}
-	inline double read_number(){double d;cin>>d;return d;}
-	inline string read_string(){string s;cin>>s;return s;}
-	inline string read_line(){string s;getline(cin,s);return s;}
-	inline string read_getchar(){char c=getchar();return (string)""+c;}
-	inline bool read_eof(){return cin.eof();}
+	inline void fwrite_char(int handle,unsigned char x){
+		check_handle(handle);
+		fwrite(&x,sizeof(x),1,file_ptrs[handle]);
+		CHECK_FILE_ERR();
+		fflush(file_ptrs[handle]);
+	}
 };
 using namespace file_manager;
 
@@ -567,6 +633,12 @@ void tokenize(const string&file,const string&src,vector<Token>&tokens=tokens,int
 		cur.line=line,cur.column=column,cur.file=file;
 		if(isalpha(src[loc])||src[loc]=='_'){
 			while((loc<len)&&(isalpha(src[loc])||isdigit(src[loc])||src[loc]=='_'))cur.val.push_back(src[loc]),nextchar();
+			if(tokens.size()>0&&tokens.back().type==TOK_NUM&&tokens.back().val.back()=='.'){
+				tokens.back().val.pop_back();
+				auto bk=tokens.back();
+				bk.column+=bk.val.size()-1,bk.type=TOK_DOT,bk.val=".";
+				tokens.push_back(bk);
+			}
 			cur.type=getIdType(cur.val),tokens.push_back(cur); 
 		}
 		else if(isdigit(src[loc])||src[loc]=='.'){
@@ -589,6 +661,18 @@ void tokenize(const string&file,const string&src,vector<Token>&tokens=tokens,int
 				if(cur.val.size()==1&&cur.val[0]=='.')cur.type=TOK_DOT;
 				else cur.type=TOK_NUM;
 				tokens.push_back(cur);
+				char c=tokens.back().val.back();
+				if(tolower(c)=='e'){
+					tokens.back().val.pop_back();
+					if(tokens.back().val.back()=='.'){
+						tokens.back().val.pop_back();
+						auto bk=tokens.back();
+						bk.type=TOK_DOT,bk.val=".";
+						tokens.push_back(bk);
+					}
+					else SYNTAX_ERR("invalid decimal literal: digits expected after '%c'",c);
+					loc--;
+				}
 			}
 		}
 		else if(src[loc]=='\''||src[loc]=='\"'){
@@ -770,6 +854,14 @@ Token readToken(uchar type){
 }
 using namespace tokenizer;
 
+struct NamePair{
+	string klass,name;
+	bool operator<(const NamePair&r)const{
+		if(klass!=r.klass)return klass<r.klass;
+		return name<r.name;
+	}
+};
+
 template <typename T> 
 struct Table{
 	uint usedIdx;
@@ -792,7 +884,7 @@ struct Table{
 		}
 		return tables[key];
 	}
-	uint Id(const string&key){
+	uint Id(const T&key){
 		return tables[key];
 	}
 	T& Get(uint id){
@@ -1857,6 +1949,7 @@ namespace VirtualMachine{
 double* NUMBER_CONSTANT_VALUE;
 string* STRING_CONSTANT_VALUE;
 
+struct LocalObject;
 struct Object;
 struct Value;
 struct Fn;
@@ -1870,6 +1963,7 @@ string StrictVal2Str(const ValueRef&val);
 string ValType2Str(const ValueRef&val);
 Object* NewString(const string&str);
 Object* NewArray(uint size);
+Object* NewLocalObject(const LocalObject&o);
 Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject);
 Value GetAttribute(const ValueRef&val,const string&key);
 Value InnerCall(ValueRef fn,ValueRef thisObject);
@@ -1885,7 +1979,7 @@ typedef enum{
 	TYPE_ARR,
 	TYPE_MAP,
 	TYPE_FUNC,
-	TYPE_PTR,
+	TYPE_LOCALOBJ,
 } ValueType;
 
 const string TYPE_NAME[]={
@@ -1895,7 +1989,19 @@ const string TYPE_NAME[]={
 	"array",
 	"object",
 	"function",
-	"pointer",
+	"local-object",
+};
+
+struct LocalObject{
+	const char* type;
+	void* ptr;
+	size_t size;
+	template <typename T>
+	T* as(){return (T*)ptr;}
+	void Dispose(){
+		free(ptr);
+		puts("freed");
+	}
 };
 
 struct Value{
@@ -1903,7 +2009,6 @@ struct Value{
 	union{
 		double num;
 		ObjectRef obj;
-		void* ptr;
 	};
 	string ToStr()const{
 		return Val2Str((const ValueRef)this);
@@ -1928,9 +2033,9 @@ struct Value{
 		type=TYPE_STR;
 		obj=NewString(str);
 	}
-	Value(void* _ptr){
-	    type=TYPE_PTR;
-	    ptr=_ptr;
+	Value(const LocalObject&o){
+	    type=TYPE_LOCALOBJ;
+	    obj=NewLocalObject(o);
 	}
 	#define CHECK_OP(symbol,attr)\
 	if(HasAttribute((const ValueRef)this,(string)#attr)){\
@@ -2084,6 +2189,7 @@ struct Object{
 		vector<Value>* arr;
 		map<Value,Value>* dict;
 		Fn* fn;
+		LocalObject* localObject;
 	};
 	bool isBlack,released;
 };
@@ -2190,6 +2296,18 @@ uint ALLOCATED;
 
 #define ADD_MEM(type)\
 ALLOCATED+=sizeof(type)
+
+ObjectRef NewLocalObject(const LocalObject&o){
+	if(ALLOCATED>=GC_TRIGGER)GC();
+	
+	ObjectRef obj=new Object(TYPE_LOCALOBJ);
+	OBJ_POOL.Add(obj);
+	obj->localObject=new LocalObject(o);
+	
+	ADD_MEM(string);
+	
+	return obj;
+}
 
 ObjectRef NewString(const string&str){
 	if(ALLOCATED>=GC_TRIGGER)GC();
@@ -2308,7 +2426,13 @@ string Val2Str(const ValueRef&val){
         	}
 		    return map2str(val->obj->dict);
         }
-		case TYPE_PTR:return "(ptr @ "+ptr2str(val->ptr)+")";
+		case TYPE_LOCALOBJ:{
+        	if(HasAttribute((const ValueRef)val,(string)"ToString")){
+        	   const Value&func=GetAttribute((const ValueRef)val,(string)"ToString");
+        	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(const ValueRef)val).ToStr();
+        	}
+		    return (string)"<"+val->obj->localObject->type+" @ "+ptr2str(val->obj->localObject->ptr)+">";
+        }
 		case TYPE_FUNC:return val->obj->fn->ToStr();
 		default:return TYPE_NAME[val->type];
 	}
@@ -2320,14 +2444,18 @@ string StrictVal2Str(const ValueRef&val){
 		case TYPE_STR:return strictStr(*(val->obj->str));
 		case TYPE_ARR:return array2str(val->obj->arr); 
 		case TYPE_MAP:return map2str(val->obj->dict); 
-		case TYPE_PTR:return "(ptr @ "+ptr2str(val->ptr)+")";
+		case TYPE_LOCALOBJ:return "(local-object @ "+ptr2str(val->obj)+")";
 		case TYPE_FUNC:return val->obj->fn->ToStr();
 		default:return TYPE_NAME[val->type];
 	}
 }
 
 string ValType2Str(const ValueRef&val){
-	if(HasAttribute(val,"__type__"))return GetAttribute(val,"__type__").ToStr();
+	if(val->type==TYPE_LOCALOBJ)return val->obj->localObject->type;
+	if(
+		val->type==TYPE_MAP
+		&&val->obj->dict->find((string)"__type__")!=val->obj->dict->end()
+	)return (*(val->obj->dict))[(string)"__type__"].ToStr();
 	return TYPE_NAME[val->type]; 
 }
 
@@ -2358,6 +2486,10 @@ BUILTIN_ATTRIBUTES(STRING,16)
 BUILTIN_ATTRIBUTES(ARRAY,16)
 BUILTIN_ATTRIBUTES(MAP,4)
 
+Table<NamePair> CUSTOM_ATTR;
+Value* CUSTOM_ATTR_FN;
+const uint CUSTOM_ATTR_COUNT=30;
+
 Value* BUILTIN_VAR;
 vector<Frame> CALL_STACK;
 
@@ -2375,20 +2507,23 @@ Value GetBuiltinAttribute(const Value&a,const string&attrName){
 	switch(a.type){
 		case TYPE_MAP:{
 			if(MAP_ATTR.Has(attrName))return MAP_ATTR_FN[MAP_ATTR.Id(attrName)];
-			THROW("type 'map' does not own any attribute named '%s'",attrName.c_str());
 			break; 
 		}
 		case TYPE_STR:{
+			if(attrName=="Length")return a.obj->str->length();
 			if(STRING_ATTR.Has(attrName))return STRING_ATTR_FN[STRING_ATTR.Id(attrName)];
-			THROW("type 'string' does not own any attribute named '%s'",attrName.c_str());
 			break; 
 		}
 		case TYPE_ARR:{
+			if(attrName=="Length")return a.obj->arr->size();
 			if(ARRAY_ATTR.Has(attrName))return ARRAY_ATTR_FN[ARRAY_ATTR.Id(attrName)];
-			THROW("type 'array' does not own any attribute named '%s'",attrName.c_str());
 			break; 
 		}
-		default:return Value();
+		default:{
+			NamePair namePair={a.GetTypeName(),attrName};
+			if(CUSTOM_ATTR.Has(namePair))return CUSTOM_ATTR_FN[CUSTOM_ATTR.Id(namePair)];
+			return Value();
+		}
 	}
 	return Value();
 }
@@ -2398,7 +2533,9 @@ bool HasBuiltinAttribute(const Value&a,const string&attrName){
 		case TYPE_MAP:return MAP_ATTR.Has(attrName);
 		case TYPE_STR:return STRING_ATTR.Has(attrName);
 		case TYPE_ARR:return ARRAY_ATTR.Has(attrName);
-		default:return false;
+		default:{
+			return CUSTOM_ATTR.Has({a.GetTypeName(),attrName});
+		}
 	}
 }
 
@@ -2424,6 +2561,10 @@ string GetStringIndex(const string&str,const Value&value){
 			if(index<0)index+=str.size();
 			return (string)""+str[index];
 		}
+		case TYPE_STR:{
+			THROW(INDEX_EXCEPTION,FORMAT("String has no attributes named '%s'",value.ToStr().c_str()));
+			return "";
+		}
 		default:{
 			THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as string indices",value.GetTypeName().c_str()));
 			return "";
@@ -2438,6 +2579,10 @@ Value GetArrayIndex(vector<Value>*arr,const Value&value){
 			if(!CheckIndex(index,arr->size()))THROW(INDEX_EXCEPTION,FORMAT("index %d out of array bounds",index));
 			if(index<0)index+=arr->size();
 			return (*arr)[index];
+		}
+		case TYPE_STR:{
+			THROW(INDEX_EXCEPTION,FORMAT("Array has no attributes named '%s'",value.ToStr().c_str()));
+			return Value();
 		}
 		default:{
 			THROW(INDEX_EXCEPTION,FORMAT("type '%s' cannot be used as array indices",value.GetTypeName().c_str()));
@@ -2618,7 +2763,11 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     						POPSTACK();
     						BACK();
     					}
-    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
+    					default:{
+    						if(TOP().type==TYPE_STR)THROW(INDEX_EXCEPTION,FORMAT("type '%s' has no attributes named '%s'",TOP_2().GetTypeName().c_str(),TOP().obj->str->c_str()));
+    						else THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP_2().GetTypeName().c_str()));
+							break;
+						}
     				}
     			}
     			case GETADDRSMI:{
@@ -2656,7 +2805,7 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     						TOP()=((*(TOP().obj->dict))[STRING_CONSTANT_VALUE[ins.x]]);
     						BACK();
     					}
-    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' is not index-able",TOP().GetTypeName().c_str()));
+    					default:THROW(INDEX_EXCEPTION,FORMAT("type '%s' has no attributes named '%s'",TOP().GetTypeName().c_str(),STRING_CONSTANT_VALUE[ins.x].c_str()));
     				}
     			}
     			case INVOKE:{
@@ -2680,11 +2829,14 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     						func=((*(owner->obj->dict))[index]);
     						break;
     					}
-    					default:THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
+    					default:{
+    						THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' has no attributes called '%s'",owner->GetTypeName().c_str(),index.ToStr().c_str()));
+							break;
+						}
     				}
     				
     				if(func.type!=TYPE_FUNC){
-    					THROW(TYPE_EXCEPTION,FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
+    					THROW(TYPE_EXCEPTION,FORMAT("'%s' is not a method of type '%s'",index.ToStr().c_str(),owner->GetTypeName().c_str()));
     				}
     				
     				Value value=func.obj->fn->CallFunc(esp-argc,argc,esp,owner);
@@ -2713,11 +2865,12 @@ Value RunCode(RunStack bottom,RunStack esp,Fn* fn,ValueRef thisObject){
     						func=((*(owner->obj->dict))[index]);
     						break;
     					}
-    					default:THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' does not own methods",owner->GetTypeName().c_str()));
+    					default:
+    						THROW(ATTRIBUTE_EXCEPTION,FORMAT("type '%s' has no attributes called '%s'",owner->GetTypeName().c_str(),index.ToStr().c_str()));
     				}
     				
     				if(func.type!=TYPE_FUNC){
-    					THROW(TYPE_EXCEPTION,FORMAT("type '%s' is not a method",func.GetTypeName().c_str()));
+    					THROW(TYPE_EXCEPTION,FORMAT("'%s' is not a method of type '%s'",index.ToStr().c_str(),owner->GetTypeName().c_str()));
     				}
     				
     				Value value=func.obj->fn->CallFunc(esp-argc,argc,esp,owner);
@@ -3517,103 +3670,163 @@ BT_FUNC(Open){
 	if(argc!=2)ARGC_ERR(2,"open");
 	if(ARG(0).type!=TYPE_STR)ARG_TYPE_ERR(0,"string","open");
 	if(ARG(1).type!=TYPE_STR)ARG_TYPE_ERR(1,"string","open");
-	return Value(file_manager::file_open(*ARG(0).obj->str,*ARG(1).obj->str));
+	LocalObject obj;
+	obj.type="FILE";
+	obj.ptr=malloc(sizeof(int));
+	*obj.as<int>()=file_manager::file_open(*ARG(0).obj->str,*ARG(1).obj->str);
+	ALLOCATED+=obj.size=sizeof(int);
+	return obj;
 }
+
 BT_FUNC(Close){
 	if(argc!=1)ARGC_ERR(1,"close");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","close");
-	return Value(file_manager::file_close(ARG(0).num));
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","close");
+	return Value(file_manager::file_close(*(ARG(0).obj->localObject->as<int>())));
 }
 BT_FUNC(Eof){
 	if(argc!=1)ARGC_ERR(1,"eof");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","eof");
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","eof");
 	return Value(file_manager::file_eof(ARG(0).num));
 }
 BT_FUNC(Read){
-	if(argc!=1)ARGC_ERR(1,"read");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","read");
-	return Value(file_manager::file_eof(ARG(0).num));
+	if(argc!=2)ARGC_ERR(2,"read");
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","read");
+	if(ARG(1).type!=TYPE_NUM)ARG_TYPE_ERR(1,"number","read");
+	return Value(file_manager::fread_(*(ARG(0).obj->localObject->as<int>()),ARG(1).num));
 }
 BT_FUNC(ReadLine){
 	if(argc!=1)ARGC_ERR(1,"readLine");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","readLine");
-	return Value(file_manager::fread_line(ARG(0).num));
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","readLine");
+	return Value(file_manager::fread_line(*(ARG(0).obj->localObject->as<int>())));
 }
 BT_FUNC(ReadNumber){
 	if(argc!=1)ARGC_ERR(1,"readNumber");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","readNumber");
-	return Value(file_manager::fread_number(ARG(0).num));
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","readNumber");
+	return Value(file_manager::fread_number(*(ARG(0).obj->localObject->as<int>())));
 }
 BT_FUNC(ReadString){
 	if(argc!=1)ARGC_ERR(1,"readString");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","readString");
-	return Value(file_manager::fread_string(ARG(0).num));
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","readString");
+	return Value(file_manager::fread_string(*(ARG(0).obj->localObject->as<int>())));
 }
 BT_FUNC(ReadChar){
 	if(argc!=1)ARGC_ERR(1,"readChar");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","readChar");
-	return Value(file_manager::fread_char(ARG(0).num));
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","readChar");
+	return Value(file_manager::fread_char(*(ARG(0).obj->localObject->as<int>())));
 }
 BT_FUNC(Write){
-	if(argc!=2)ARGC_ERR(2,"Write");
-	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","write");
-	return Value(file_manager::fwrite_string(ARG(0).num,ARG(1).ToStr()));
+	if(argc!=2)ARGC_ERR(2,"write");
+	if(ARG(0).type!=TYPE_LOCALOBJ||strcmp(ARG(0).obj->localObject->type,"FILE"))ARG_TYPE_ERR(0,"FILE","write");
+	return Value(file_manager::fwrite_string(*(ARG(0).obj->localObject->as<int>()),ARG(1).ToStr()));
+}
+BT_FUNC(FILE_Close){
+	return Value(file_manager::file_close(*(thisObject->obj->localObject->as<int>())));
+}
+BT_FUNC(FILE_Eof){
+	return Value(file_manager::file_eof(*(thisObject->obj->localObject->as<int>())));
+}
+BT_FUNC(FILE_Read){
+	if(argc!=1)ARGC_ERR(1,"FILE.Read");
+	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","FILE.Read");
+	return Value(file_manager::fread_(*(thisObject->obj->localObject->as<int>()),ARG(0).num));
+}
+BT_FUNC(FILE_ReadLine){
+	return Value(file_manager::fread_line(*(thisObject->obj->localObject->as<int>())));
+}
+BT_FUNC(FILE_ReadNumber){
+	return Value(file_manager::fread_number(*(thisObject->obj->localObject->as<int>())));
+}
+BT_FUNC(FILE_ReadString){
+	return Value(file_manager::fread_string(*(thisObject->obj->localObject->as<int>())));
+}
+BT_FUNC(FILE_ReadChar){
+	return Value(file_manager::fread_char(*(thisObject->obj->localObject->as<int>())));
+}
+BT_FUNC(FILE_Write){
+	if(argc!=1)ARGC_ERR(1,"FILE.Write");
+	return Value(file_manager::fwrite_string(*(thisObject->obj->localObject->as<int>()),ARG(0).ToStr()));
+}
+BT_FUNC(FILE_Seek){
+	if(argc!=1&&argc!=2)ARGC_ERR_2("1 or 2 arguments","FILE.Seek");
+	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","FILE.Seek");
+	if(argc==2&&ARG(1).type!=TYPE_STR)ARG_TYPE_ERR(1,"string","FILE.Seek");
+	string seekPos=argc==2?*(ARG(1).obj->str):"set";
+	return Value(file_manager::fseek_(*(thisObject->obj->localObject->as<int>()),ARG(0).num,seekPos));
+}
+BT_FUNC(FILE_Tell){
+	return Value(file_manager::ftell_(*(thisObject->obj->localObject->as<int>())));
 }
 BT_FUNC(loadDll){
-	if(argc!=2)ARGC_ERR(2,"loadNative");
+	if(argc!=1)ARGC_ERR(1,"loadNative");
 	if(ARG(0).type!=TYPE_STR)ARG_TYPE_ERR(0,"string","loadNative");
-	if(ARG(1).type!=TYPE_STR)ARG_TYPE_ERR(1,"string","loadNative");
-    NativeFunction func;
-    
-#ifdef _WIN32
-	HMODULE hMod=LoadLibrary(ARG(0).obj->str->c_str());
-	if(!hMod)THROW(DLL_EXCEPTION,FORMAT("cannot open dll '%s'",ARG(0).obj->str->c_str()));
-	func=(NativeFunction)GetProcAddress(hMod,ARG(1).obj->str->c_str());
-	if(!func)THROW(DLL_EXCEPTION,FORMAT("cannot load function '%s'",ARG(1).obj->str->c_str()));
-#elif __linux__
-    void* handle=dlopen(ARG(0).obj->str->c_str(),RTLD_LAZY);
-    if(!handle)THROW(DLL_EXCEPTION,FORMAT("cannot open dll '%s', error: %s",ARG(0).obj->str->c_str()),dlerror());
-    func=reinterpret_cast<NativeFunction>(dlsym(handle,ARG(1).obj->str->c_str()));
-    const char* dlsymError=dlerror();
-    if(dlsymError)THROW(DLL_EXCEPTION,FORMAT("cannot load function '%s', error: %s",ARG(1).obj->str->c_str()),dlsymError);
-#endif
+	LocalObject obj;
+	obj.type="DynLib";
 	
+	LIB_HANDLE handle=LOAD_LIB(ARG(0).obj->str->c_str());
+	if(!handle)THROW(DLL_EXCEPTION,FORMAT("cannot open library '%s', error: %s",ARG(0).obj->str->c_str(),GET_ERROR()));
+	obj.ptr=malloc(sizeof(LIB_HANDLE));
+	ALLOCATED+=obj.size=sizeof(LIB_HANDLE);
+	*obj.as<LIB_HANDLE>()=handle;
+
+	return obj;
+}
+BT_FUNC(DynLib_Get){
+	if(argc!=1)ARGC_ERR(1,"DynLib.Get");
+	if(ARG(0).type!=TYPE_STR)ARG_TYPE_ERR(0,"string","DynLib.Get");
+	NativeFunction func;
+	
+	LIB_HANDLE handle=*(thisObject->obj->localObject->as<LIB_HANDLE>());
+	func=(NativeFunction)GET_SYM(handle,ARG(0).obj->str->c_str());
+	if(!func)THROW(DLL_EXCEPTION,FORMAT("cannot load function '%s', error: %s",ARG(0).obj->str->c_str(),GET_ERROR()));
+
 	Value value;
 	value.type=TYPE_FUNC;
-	value.obj=NewNativeFunc(func,(*ARG(1).obj->str)+"@"+(*ARG(0).obj->str));
+	value.obj=NewNativeFunc(func,*ARG(0).obj->str);
 	return value;
 }
+BT_FUNC(DynLib_Close){
+	LIB_HANDLE handle=*(thisObject->obj->localObject->as<LIB_HANDLE>());
+	return CLOSE_LIB(handle);
+}
 
-#define MATH_FN(name)\
+#define MATH_FN(name,name2)\
 BT_FUNC(name){\
 	if(argc!=1)ARGC_ERR(1,#name);\
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number",#name);\
 	return name(ARG(0).num);\
+}\
+BT_FUNC(number_##name2){\
+	return name(thisObject->num);\
 }
 
-#define MATH_FN_2(name)\
+#define MATH_FN_2(name,name2)\
 BT_FUNC(name){\
 	if(argc!=2)ARGC_ERR(2,#name);\
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number",#name);\
 	if(ARG(1).type!=TYPE_NUM)ARG_TYPE_ERR(1,"number",#name);\
 	return name(ARG(0).num,ARG(1).num);\
+}\
+BT_FUNC(number_##name2){\
+	if(argc!=1)ARGC_ERR(1,"number."#name2);\
+	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","number."#name2);\
+	return name(thisObject->num,ARG(0).num);\
 }
 
-MATH_FN(sin)
-MATH_FN(asin)
-MATH_FN(cos)
-MATH_FN(acos)
-MATH_FN(tan)
-MATH_FN(atan)
-MATH_FN_2(atan2)
-MATH_FN(abs)
-MATH_FN(ceil)
-MATH_FN(floor)
-MATH_FN(round)
-MATH_FN(exp)
-MATH_FN(log)
-MATH_FN(sqrt)
-MATH_FN_2(pow)
+MATH_FN(sin,Sin)
+MATH_FN(asin,Asin)
+MATH_FN(cos,Cos)
+MATH_FN(acos,Acos)
+MATH_FN(tan,Tan)
+MATH_FN(atan,Atan)
+MATH_FN_2(atan2,Atan2)
+MATH_FN(abs,Abs)
+MATH_FN(ceil,Ceil)
+MATH_FN(floor,Floor)
+MATH_FN(round,Round)
+MATH_FN(exp,Exp)
+MATH_FN(log,Log)
+MATH_FN(sqrt,Sqrt)
+MATH_FN_2(pow,Pow)
 
 BT_FUNC(max){
 	if(argc==0)return Value();
@@ -3640,6 +3853,9 @@ BT_FUNC(isNan){
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","isNan");
 	return ARG(0).num==ARG(0).num;
 }
+BT_FUNC(number_IsNan){
+	return thisObject->num==thisObject->num;
+}
 BT_FUNC(toDeg){
 	if(argc!=1)ARGC_ERR(1,"toDeg");
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","toDeg");
@@ -3649,6 +3865,12 @@ BT_FUNC(toRad){
 	if(argc!=1)ARGC_ERR(1,"toRad");
 	if(ARG(0).type!=TYPE_NUM)ARG_TYPE_ERR(0,"number","toRad");
 	return ARG(0).num/180*PI;
+}
+BT_FUNC(number_ToDeg){
+	return thisObject->num/PI*180;
+}
+BT_FUNC(number_ToRad){
+	return thisObject->num/180*PI;
 }
 BT_FUNC(system){
 	if(argc!=1)ARGC_ERR(1,"system");
@@ -4133,6 +4355,44 @@ void SetupFuncs(){
 	STR_FUNC("UTF8ToGBK",UTF82GBK);
 	
 	STR_FUNC("Join",Join);
+	
+	CUSTOM_ATTR_FN=new Value[CUSTOM_ATTR_COUNT*20];
+	
+	#define CUSTOM_FUNC(klass,name)\
+	bdidx=CUSTOM_ATTR.Ensure({#klass,#name});\
+	CUSTOM_ATTR_FN[bdidx].type=TYPE_FUNC;\
+	CUSTOM_ATTR_FN[bdidx].obj=NewBuiltinFunc(Builtin_##klass##_##name,(string)#klass+"."+#name)
+	CUSTOM_FUNC(number,Sin);
+	CUSTOM_FUNC(number,Asin);
+	CUSTOM_FUNC(number,Cos);
+	CUSTOM_FUNC(number,Acos);
+	CUSTOM_FUNC(number,Tan);
+	CUSTOM_FUNC(number,Atan);
+	CUSTOM_FUNC(number,Atan2);
+	CUSTOM_FUNC(number,Abs);
+	CUSTOM_FUNC(number,Ceil);
+	CUSTOM_FUNC(number,Floor);
+	CUSTOM_FUNC(number,Round);
+	CUSTOM_FUNC(number,Exp);
+	CUSTOM_FUNC(number,Log);
+	CUSTOM_FUNC(number,Pow);
+	CUSTOM_FUNC(number,Sqrt);
+	CUSTOM_FUNC(number,IsNan);
+	CUSTOM_FUNC(number,ToDeg);
+	CUSTOM_FUNC(number,ToRad);
+	CUSTOM_FUNC(FILE,Close);
+	CUSTOM_FUNC(FILE,Eof);
+	CUSTOM_FUNC(FILE,Read);
+	CUSTOM_FUNC(FILE,ReadLine);
+	CUSTOM_FUNC(FILE,ReadNumber);
+	CUSTOM_FUNC(FILE,ReadString);
+	CUSTOM_FUNC(FILE,ReadChar);
+	CUSTOM_FUNC(FILE,Write);
+	CUSTOM_FUNC(FILE,Tell);
+	CUSTOM_FUNC(FILE,Seek);
+	
+	CUSTOM_FUNC(DynLib,Get);
+	CUSTOM_FUNC(DynLib,Close);
 }
 
 }
@@ -4222,6 +4482,7 @@ void GC(){
 	MARK_ATTR(MAP)
 	MARK_ATTR(STRING)
 	MARK_ATTR(ARRAY)
+	MARK_ATTR(CUSTOM)
 	for(auto a=STACK;a<globalEsp;a++){
 		MarkValue(a);
 	}
@@ -4252,6 +4513,9 @@ void GC(){
 			case TYPE_ARR:ref->arr->clear();delete ref->arr;ALLOCATED-=sizeof(vector<Value>);break;
 			case TYPE_MAP:ref->dict->clear();delete ref->dict;ALLOCATED-=sizeof(map<Value,Value>);break;
 			case TYPE_STR:ref->str->clear();delete ref->str;ALLOCATED-=sizeof(string);break;
+			case TYPE_LOCALOBJ:
+				ALLOCATED-=ref->localObject->size;ref->localObject->Dispose();
+				delete ref->localObject;ALLOCATED-=sizeof(LocalObject);break;
 			default:break;
 		}
 		delete ref;
@@ -4270,7 +4534,7 @@ struct rbq_env{
 	Value (*NewNumber)(double x);
 	Value (*NewString)(const char* buf);
 	Value (*NewStringWithGBK)(const char* buf);
-	Value (*NewPointer)(void* ptr);
+	Value (*NewLocalObject)(const char* type,void* ptr,size_t size);
 	
 	Value (*NewArray)();
 	Value (*GetArrayIndex)(Value value,int index);
@@ -4295,6 +4559,10 @@ struct rbq_env{
 	Value (*JSON)(const char*json);
 	
 	void (*Throw)(const char*type,const char*reason);
+	void (*BindMethod)(const char*type,const char*name,Value value);
+	
+	void* (*Malloc)(int size);
+	void (*Free)(void* ptr,int size); 
 };
 
 namespace Native{
@@ -4308,8 +4576,8 @@ Value Native_NewString(const char* buf){
 Value Native_NewStringWithGBK(const char* buf){
 	return gbkToUtf8(string(buf));
 }
-Value Native_NewPointer(void* ptr){
-	return Value(ptr);
+Value Native_NewLocalObject(const char* name,void* ptr,size_t size){
+	return Value((LocalObject){name,ptr,size});
 }
 
 Value Native_NewArray(){
@@ -4388,6 +4656,17 @@ Value Native_JSON(const char* json){
 void Native_Throw(const char* type,const char* reason){
 	THROW(type,reason);
 }
+void Native_BindMethod(const char* type,const char* name,Value method){
+	CUSTOM_ATTR_FN[CUSTOM_ATTR.Ensure({(string)type,(string)name})]=method;
+}
+void* Native_Malloc(int size){
+	ALLOCATED+=size;
+	return malloc(size);
+} 
+void Native_Free(void* ptr,int size){
+	ALLOCATED-=size;
+	free(ptr);
+}
 
 void InitNative(){
 	env=new rbq_env();
@@ -4397,7 +4676,7 @@ void InitNative(){
 	BIND_ENV(NewNumber);
 	BIND_ENV(NewString);
 	BIND_ENV(NewStringWithGBK);
-	BIND_ENV(NewPointer);
+	BIND_ENV(NewLocalObject);
 	
 	BIND_ENV(NewArray);
 	BIND_ENV(ResizeArray);
@@ -4422,6 +4701,9 @@ void InitNative(){
 	BIND_ENV(JSON);
 	
 	BIND_ENV(Throw);
+	BIND_ENV(BindMethod);
+	BIND_ENV(Malloc);
+	BIND_ENV(Free);
 }
 
 }
