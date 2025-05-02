@@ -649,10 +649,12 @@ void tokenize(const string&file,const string&src,vector<Token>&tokens=tokens,int
 				cur.type=TOK_HEX,tokens.push_back(cur);
 			}
 			else{
-				while((loc<len&&isdigit(src[loc]))||src[loc]=='.'||src[loc]=='E'||src[loc]=='e'||src[loc]=='-'||src[loc]=='_'){
+				while((loc<len&&isdigit(src[loc]))||src[loc]=='.'||src[loc]=='E'||src[loc]=='e'||src[loc]=='_'){
 					if(src[loc]=='.'){if(!d)d=1;else break;}
-					if(src[loc]=='e'||src[loc]=='E'){if(n&&!e)e=1;else break;}
-					if(src[loc]=='-'){if(loc-1>=0&&(src[loc-1]=='e'||src[loc-1]=='E'));else break;}
+					if(src[loc]=='e'||src[loc]=='E'){
+						if(n&&!e){e=1,cur.val.push_back(src[loc]),nextchar();while(loc<len&&(src[loc]=='-'||src[loc]=='+'))cur.val.push_back(src[loc]),nextchar();}
+						else break;
+					}
 					if(isdigit(src[loc]))n=1;
 					if(src[loc]!='_')cur.val.push_back(src[loc]);
                     nextchar();
