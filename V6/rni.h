@@ -13,25 +13,30 @@ char excpbuf[1024];
 #define FORMAT(str,...) (sprintf(excpbuf,str,__VA_ARGS__),excpbuf)
 
 typedef enum{
-	TYPE_NULL,
+	TYPE_NULL=0,
 	TYPE_NUM,
 	TYPE_STR,
 	TYPE_ARR,
 	TYPE_MAP,
 	TYPE_FUNC,
-	TYPE_PTR,
+	TYPE_LOCALOBJ,
 } ValueType;
 
 const char* typenames[]={
-	"undefined",
 	"null",
 	"number",
 	"string",
 	"array",
 	"object",
 	"function",
-	"pointer",
+	"local-object",
 };
+
+typedef struct{
+	const char* type;
+	void* ptr;
+	size_t size;
+} LocalObject;
 
 typedef struct{
 	ValueType type;
@@ -40,6 +45,7 @@ typedef struct{
 		void* arr;
 		void* dict;
 		void* fn;
+		LocalObject* localObject;
 	};
 	bool isBlack,released;
 }Object;
@@ -49,7 +55,6 @@ typedef struct{
 	union{
 		double num;
 		Object* obj;
-	    void* ptr;
 	};
 }Value;
 
@@ -61,7 +66,7 @@ typedef struct{
 	Value (*NewNumber)(double x);
 	Value (*NewString)(const char* buf);
 	Value (*NewStringWithGBK)(const char* buf);
-	Value (*NewPointer)(void* ptr);
+	Value (*NewLocalObject)(const char* type,void* ptr,size_t size);
 	
 	Value (*NewArray)();
 	Value (*GetArrayIndex)(Value value,int index);
@@ -86,10 +91,13 @@ typedef struct{
 	Value (*JSON)(const char*json);
 	
 	void (*Throw)(const char*type,const char*reason);
+	void (*BindMethod)(const char*type,const char*name,Value value);
+	void* (*Malloc)(int size);
+	void (*Free)(void* ptr,int size); 
 }rbq_env;
 
 #define rbq_inner_native_func(name)\
-Value __declspec(dllexport) name(void* __env,ValueRef _this,Value* argv,int argc)
+Value name(void* __env,ValueRef _this,Value* argv,int argc)
 
 #define env ((rbq_env*)(__env))
 
