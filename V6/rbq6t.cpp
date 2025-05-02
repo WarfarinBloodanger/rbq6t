@@ -527,7 +527,7 @@ enum {
 	TOK_COM,TOK_ASS,TOK_DOT,TOK_QUEZ,TOK_COL,
 	TOK_LPR,TOK_RPR,TOK_LBK,TOK_RBK,TOK_LBR,TOK_RBR,TOK_FEN,
 	TOK_FUNC,TOK_IF,TOK_ELSE,TOK_WHILE,TOK_RET,TOK_FOR,TOK_VAR,TOK_BREAK,TOK_CTN,TOK_ALL,
-	TOK_TRUE,TOK_FALSE,TOK_NULL,TOK_UNDEFINED,TOK_INCLUDE,TOK_THIS,TOK_CLASS,TOK_NEW,TOK_HAS,TOK_TYPEOF,TOK_CHOOSE,TOK_IS,
+	TOK_TRUE,TOK_FALSE,TOK_NULL,TOK_INCLUDE,TOK_THIS,TOK_CLASS,TOK_NEW,TOK_HAS,TOK_TYPEOF,TOK_CHOOSE,TOK_IS,
 	TOK_OP,TOK_CONSTRUCTOR,TOK_PUB,TOK_PROT,TOK_PRIV,TOK_SUPER,TOK_STATIC,TOK_ARR,
 	TOK_TRY,TOK_CATCH,TOK_THROW,
 	TOK_ADDE,TOK_SUBE,
@@ -541,7 +541,7 @@ const string tokenName[]={
 	"'&&'","'||'","'!'","'&'","'|'","'~'","'^'","'<<'","'>>'",
 	"','","'='","'.'","'?'","':'","'('","')'","'['","']'","'{'","'}'","';'",
 	"'function'","'if'","'else'","'while'","'return'","'for'","'var'","'break'","'continue'","'all'",
-	"'true'","'false'","'null'","'undef'","'include'","'this'","'class'","'new'","'has'","'typeof'","'or'","'is'",
+	"'true'","'false'","'null'","'include'","'this'","'class'","'new'","'has'","'typeof'","'or'","'is'",
 	"'operator'","'constructor'","'public'","'protected'","'private'","'super'","'static'","'arr'",
 	"try","catch","throw",
 	"+=","-=",
@@ -599,7 +599,6 @@ char getIdType(const string&s){
 	if(s=="true")return TOK_TRUE;
 	if(s=="false")return TOK_FALSE;
 	if(s=="null")return TOK_NULL;
-	if(s=="undef")return TOK_UNDEFINED;
 	if(s=="include")return TOK_INCLUDE;
 	if(s=="this")return TOK_THIS;
 	if(s=="class")return TOK_CLASS;
@@ -1188,6 +1187,11 @@ CodeSet Expr(uint precd){
 		}
 		case TOK_THIS:{
 			c.Add(Instr(LOADTHIS));
+			nextToken();
+			break;
+		}
+		case TOK_NULL:{
+			c.Add(Instr(LOADNULL));
 			nextToken();
 			break;
 		}
@@ -2058,6 +2062,12 @@ struct Value{
 	}\
 	THROW(TYPE_EXCEPTION,FORMAT("cannot apply operation '%s %s' to type '%s'",#symbol,v.GetTypeName().c_str(),GetTypeName().c_str()))
 	
+	#define CHECK_BOOL_COMPARE_OP(symbol,attr)\
+	if(HasAttribute((const ValueRef)this,(string)#attr)){\
+	   const Value&func=GetAttribute((const ValueRef)this,(string)#attr);\
+	   if(func.type==TYPE_FUNC)return InnerCall((ValueRef)&func,(ValueRef)&v,(const ValueRef)this).IsTrue(); \
+	}\
+	
 	Value operator+(const Value&v)const{
 		if(type==TYPE_NUM&&v.type==TYPE_NUM)return num+v.num;
 		if(type==TYPE_ARR&&v.type==TYPE_ARR){
@@ -2154,17 +2164,16 @@ struct Value{
 	}
 	bool operator==(const Value&v)const{
 		if(type!=v.type)return false;
-		if(type==TYPE_NUM&&v.type==TYPE_NUM)return num==v.num;
-		if(type==TYPE_STR&&v.type==TYPE_STR)return ToStr()==v.ToStr();
-        CHECK_BOOL_OP(==,__eql__);
+		switch(type){
+			case TYPE_NULL:return true;
+			case TYPE_NUM:return num==v.num;
+			case TYPE_STR:return ToStr()==v.ToStr();
+		}
+        CHECK_BOOL_COMPARE_OP(==,__eql__);
 		return obj==v.obj;
 	}
 	bool operator!=(const Value&v)const{
-		if(type!=v.type)return true;
-		if(type==TYPE_NUM&&v.type==TYPE_NUM)return num!=v.num;
-		if(type==TYPE_STR&&v.type==TYPE_STR)return ToStr()!=v.ToStr();
-        CHECK_BOOL_OP(!=,__neq__);
-		return obj!=v.obj;
+		return !(*this==v);
 	}
 	bool IsTrue()const{
 		switch(type){
